@@ -39,14 +39,14 @@ impl Scroll {
     /// The end of a text not drawn yet.
     pub const END: Scroll = Scroll::End { top: usize::MAX };
 
-    pub(super) fn down(self, lines: usize) -> Scroll {
+    pub fn down(self, lines: usize) -> Scroll {
         match self {
             Scroll::At(top) => Scroll::At(top.saturating_add(lines)),
             Scroll::End { .. } => self,
         }
     }
 
-    pub(super) fn up(self, lines: usize) -> Scroll {
+    pub fn up(self, lines: usize) -> Scroll {
         match self {
             Scroll::At(top) | Scroll::End { top } => Scroll::At(top.saturating_sub(lines)),
         }
@@ -74,7 +74,7 @@ impl Scroll {
         clippy::wildcard_enum_match_arm,
         reason = "crossterm's `KeyCode` has keys no binding uses"
     )]
-    pub(super) fn key(self, key: KeyEvent, page: usize) -> Option<Scroll> {
+    pub fn key(self, key: KeyEvent, page: usize) -> Option<Scroll> {
         Some(match key.code {
             KeyCode::Down | KeyCode::Char('j') => self.down(1),
             KeyCode::Up | KeyCode::Char('k') => self.up(1),

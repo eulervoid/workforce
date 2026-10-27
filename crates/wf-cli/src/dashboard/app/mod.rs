@@ -33,7 +33,7 @@ use crate::dashboard::snapshot::{
     Detail, InView, InboxEntry, InboxKey, ItemListing, Listing, MovedBack, SessionInfo, Snapshot,
     Wanted,
 };
-use crate::dashboard::transcript_lines::TranscriptLines;
+use crate::dashboard::transcript_lines::{self, TranscriptLines};
 use crate::theme;
 use crate::transcript::{self, Format, Transcript, Verbosity};
 use crate::view::{ItemSummary, SessionStatus};
@@ -531,7 +531,7 @@ impl App {
         };
         let layout = transcript::Layout::new(
             info.agent_name.as_str(),
-            usize::from(self.detail_width()).max(20),
+            usize::from(self.detail_width().saturating_sub(transcript_lines::MARKS)).max(20),
             Format::Styled,
             self.verbosity,
             self.time_zone.clone(),
@@ -745,10 +745,26 @@ impl App {
         for pane in self.diffs.values_mut() {
             pane.area = None;
         }
+        for lines in self.transcript_lines.values_mut() {
+            lines.hidden();
+        }
         match drawn.detail {
             Some(DrawnDetail::Diff { area, top, cursor }) => {
                 if let Some(pane) = self.diff_on_top_mut() {
                     pane.shown(area, top, cursor);
+                }
+            }
+            Some(DrawnDetail::Transcript {
+                session,
+                area,
+                scroll,
+                cursor,
+            }) => {
+                if let Some(lines) = self.transcript_lines.get_mut(&session) {
+                    lines.shown(area, scroll.top(), cursor);
+                }
+                if let Some(opened) = self.stack_mut().last_mut() {
+                    opened.scroll = scroll;
                 }
             }
             Some(DrawnDetail::Text(scroll)) => {

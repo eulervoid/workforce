@@ -7,6 +7,7 @@ use wf_core::id::{ItemId, SessionId};
 use super::Tab;
 use super::nav::Scroll;
 use crate::dashboard::snapshot::Detail;
+use crate::dashboard::transcript_lines::EntryCursor;
 
 /// What drawing showed: where the text with the keys and the list ended up, and what a click can
 /// land on.
@@ -24,6 +25,13 @@ pub struct Drawn {
 pub enum DrawnDetail {
     /// A text, at this scroll.
     Text(Scroll),
+    /// The transcript of `session`, its lines in `area` at `scroll`, with the cursor on `cursor`.
+    Transcript {
+        session: SessionId,
+        area: Rect,
+        scroll: Scroll,
+        cursor: EntryCursor,
+    },
     /// A diff, its rows in `area` from `top`, with the cursor on the row `cursor`.
     Diff {
         area: Rect,

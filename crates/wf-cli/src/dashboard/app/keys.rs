@@ -3,7 +3,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui_input::Input;
 use wf_core::event::CommentKind;
-use wf_core::id::ItemId;
+use wf_core::id::{ItemId, SessionId};
 use wf_harness::Permission;
 
 use super::effect::Effect;
@@ -11,6 +11,7 @@ use super::nav::{Navigated, Opened, Pane, Scroll};
 use super::prompt::{Filtered, Prompt, Written};
 use super::{App, GROUPINGS, ORDERS, Split, Status, Tab};
 use crate::dashboard::snapshot::{Detail, InView};
+use crate::dashboard::transcript_lines::TranscriptLines;
 use crate::transcript::Verbosity;
 
 /// What the keys that act on what waits made of a key.
@@ -249,6 +250,19 @@ impl App {
             let item = *item;
             return self.diff_key(item, key);
         }
+        // The keys that scroll a text move the cursor of a transcript.
+        if let Some(Opened {
+            detail: Detail::Session(session),
+            scroll,
+        }) = self.stack().last().cloned()
+            && let Some(lines) = self.transcript_lines.get_mut(&session)
+            && let Some(scroll) = lines.key(key, scroll, page)
+        {
+            if let Some(opened) = self.stack_mut().last_mut() {
+                opened.scroll = scroll;
+            }
+            return None;
+        }
         let opened = self.stack_mut().last_mut()?;
         if let Some(scroll) = opened.scroll.key(key, page) {
             opened.scroll = scroll;
@@ -263,7 +277,17 @@ impl App {
                     None => self.open(Detail::Diff(item)),
                 }
             }
-            (KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'), Detail::Session(_)) => {
+            (KeyCode::Enter, Detail::Session(session)) => {
+                let session = *session;
+                if let Some(block) = self
+                    .transcript_lines
+                    .get(&session)
+                    .and_then(TranscriptLines::cursor_block)
+                {
+                    self.toggle_entry(session, block);
+                }
+            }
+            (KeyCode::Right | KeyCode::Char('l'), Detail::Session(_)) => {
                 if let Some(item) = item_of_session {
                     self.open(Detail::Diff(item));
                 }
@@ -287,10 +311,33 @@ impl App {
                     Verbosity::Abridged => Verbosity::Full,
                     Verbosity::Full => Verbosity::Abridged,
                 };
+                // Every entry, of every transcript, whatever was opened or closed by hand.
+                for lines in self.transcript_lines.values_mut() {
+                    lines.set_all();
+                }
             }
             _ => {}
         }
         None
+    }
+
+    /// Opens the entry of the block at `block` of the transcript of `session` in full, or closes
+    /// it back to abridged; its first line comes on screen.
+    pub(super) fn toggle_entry(&mut self, session: SessionId, block: usize) {
+        let (Some(lines), Some(transcript)) = (
+            self.transcript_lines.get_mut(&session),
+            self.transcripts.get(&session),
+        ) else {
+            return;
+        };
+        let Some(first_line) = lines.toggle(block, transcript) else {
+            return;
+        };
+        if let Some(opened) = self.stack_mut().last_mut()
+            && opened.detail == Detail::Session(session)
+        {
+            opened.scroll = Scroll::At(opened.scroll.top().min(first_line));
+        }
     }
 
     /// The keys of the diff of `item`, open on top.

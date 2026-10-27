@@ -423,9 +423,9 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
     );
     let navigation: &[Hint] = match (app.tab, opened.map(|opened| &opened.detail)) {
         (_, Some(Detail::Session(_))) if successor => {
-            &[BACK, SCROLL, NEXT_SESSION, ITEM, FULL, OPEN_DIFF]
+            &[BACK, MOVE, FOLD, NEXT_SESSION, ITEM, FULL, OPEN_DIFF]
         }
-        (_, Some(Detail::Session(_))) => &[BACK, SCROLL, ITEM, FULL, OPEN_DIFF],
+        (_, Some(Detail::Session(_))) => &[BACK, MOVE, FOLD, ITEM, FULL, OPEN_DIFF],
         (_, Some(Detail::Diff(_))) => match app.diff_on_top() {
             Some(pane) if pane.selection.is_some() => &[UNSELECT, EXTEND, COMMENT, CHANGE],
             Some(pane) if pane.draft_at_cursor().is_some() => &[BACK, MOVE, EDIT, DROP],

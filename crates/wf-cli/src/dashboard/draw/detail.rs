@@ -8,13 +8,14 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use super::chrome::{SEPARATOR, button, draw_breadcrumb, session_crumb};
 use super::lists::{RowLines, context_line, right_start};
-use super::{Themed, ansi_text, draw_position, padded, themed};
+use super::{KeysAt, Themed, accent, ansi_text, draw_position, padded, selection_bar, themed};
 use crate::dashboard::app::{App, DrawnDetail, Opened, Request, Scroll, Spot, Target};
 use crate::dashboard::draw_diff;
 use crate::dashboard::hint::{ALLOW, DENY, NEXT_SESSION};
 use crate::dashboard::links;
 use crate::dashboard::snapshot::Detail;
 use crate::dashboard::snapshot::{InView, InboxEntry, Place, SessionInfo};
+use crate::dashboard::transcript_lines::{EntryCursor, Extent, TranscriptLines};
 use crate::theme;
 use crate::transcript::Transcript;
 use crate::view::SessionStatus;
@@ -40,14 +41,14 @@ pub(super) fn draw_detail(
     spots.extend(draw_breadcrumb(frame, app, title));
     let in_view = app.in_view_of(&opened.detail);
     // Until the snapshot has caught up with what was opened, the detail stays empty.
-    let (scroll, item) = match &opened.detail {
+    let (drawn, item) = match &opened.detail {
         Detail::Item(id) => {
             let Some(InView::Item { text, .. }) = in_view else {
                 return None;
             };
             let text = ansi_text(text);
             (
-                draw_scrolled(frame, text, opened.scroll, body, app.base),
+                DrawnDetail::Text(draw_scrolled(frame, text, opened.scroll, body, app.base)),
                 Some(*id),
             )
         }
@@ -57,7 +58,7 @@ pub(super) fn draw_detail(
             };
             let text = ansi_text(text);
             (
-                draw_scrolled(frame, text, opened.scroll, body, app.base),
+                DrawnDetail::Text(draw_scrolled(frame, text, opened.scroll, body, app.base)),
                 None,
             )
         }
@@ -67,7 +68,7 @@ pub(super) fn draw_detail(
             };
             let text = ansi_text(text);
             (
-                draw_scrolled(frame, text, opened.scroll, body, app.base),
+                DrawnDetail::Text(draw_scrolled(frame, text, opened.scroll, body, app.base)),
                 None,
             )
         }
@@ -75,7 +76,7 @@ pub(super) fn draw_detail(
             let Some(InView::Session { info, successor }) = in_view else {
                 return None;
             };
-            let scroll = draw_session(
+            let drawn = draw_session(
                 frame,
                 app,
                 info,
@@ -84,7 +85,7 @@ pub(super) fn draw_detail(
                 body,
                 spots,
             );
-            (scroll, Some(info.item))
+            (drawn, Some(info.item))
         }
         // Code is no text with links in it.
         Detail::Diff(id) => {
@@ -116,7 +117,7 @@ pub(super) fn draw_detail(
         Some(&opened.detail),
         &app.snapshot.links,
     ));
-    Some(DrawnDetail::Text(scroll))
+    Some(drawn)
 }
 
 fn dimmed(text: String) -> Line<'static> {
@@ -144,8 +145,8 @@ fn no_transcript(place: &Place, copy: Option<&TranscriptCopy>) -> String {
 }
 
 /// Draws a session's transcript, with its permission request under it, or once it ended, that it
-/// did and the `successor` its item went on in; returns the scroll it was drawn at, and adds the
-/// answers to the request and the key to the successor to `spots`.
+/// did and the `successor` its item went on in; returns how it was drawn, and adds the answers to
+/// the request and the key to the successor to `spots`.
 pub(super) fn draw_session(
     frame: &mut Frame,
     app: &App,
@@ -154,16 +155,17 @@ pub(super) fn draw_session(
     scroll: Scroll,
     body: Rect,
     spots: &mut Vec<Spot>,
-) -> Scroll {
+) -> DrawnDetail {
     let copy = app.transcript_copies.get(&session.id);
-    let (lines, mut open): (&[Line<'static>], Vec<Line<'static>>) =
-        match app.transcripts.get(&session.id) {
-            None => (&[], vec![dimmed(no_transcript(&session.place, copy))]),
-            Some(transcript) => match app.transcript_lines.get(&session.id) {
-                Some(laid_out) => (laid_out.lines(), laid_out.open_lines(transcript)),
-                None => (&[], Vec::new()),
-            },
-        };
+    let laid_out = app
+        .transcripts
+        .get(&session.id)
+        .and(app.transcript_lines.get(&session.id));
+    let mut open = match (app.transcripts.get(&session.id), laid_out) {
+        (None, _) => vec![dimmed(no_transcript(&session.place, copy))],
+        (Some(transcript), Some(laid_out)) => laid_out.open_lines(transcript),
+        (Some(_), None) => Vec::new(),
+    };
     if let (Place::Elsewhere(device), Some(copy), Some(_)) =
         (&session.place, copy, app.transcripts.get(&session.id))
         && let Some(behind) = crate::session::copy_behind(device, copy)
@@ -207,7 +209,18 @@ pub(super) fn draw_session(
     if let Some(line) = bottom {
         frame.render_widget(Paragraph::new(line), context);
     }
-    let shown = draw_lines(frame, lines, &open, scroll, body, app.base);
+    let shown = match laid_out {
+        Some(laid_out) => {
+            let (scroll, cursor) = draw_transcript(frame, app, laid_out, &open, scroll, body);
+            DrawnDetail::Transcript {
+                session: session.id,
+                area: body,
+                scroll,
+                cursor,
+            }
+        }
+        None => DrawnDetail::Text(draw_lines(frame, &[], &open, scroll, body, app.base)),
+    };
     if let Some((what, request)) = asks.first() {
         let line = Line::from(vec![
             themed("? ", theme::attention().bold()),
@@ -270,6 +283,60 @@ pub(super) fn draw_session(
         frame.render_widget(Paragraph::new(first), ended_bar);
     }
     shown
+}
+
+/// Draws the lines of a transcript then `more`, as [`draw_lines`] does, each entry with the
+/// chevron of how much of it is shown on its first line (`▸` abridged, `▾` in full, as a file of
+/// a diff folded or not), and the cursor's bar along the entry it is on; returns the scroll and
+/// the cursor it was drawn at, the cursor kept on screen.
+fn draw_transcript(
+    frame: &mut Frame,
+    app: &App,
+    laid_out: &TranscriptLines,
+    more: &[Line<'static>],
+    scroll: Scroll,
+    area: Rect,
+) -> (Scroll, EntryCursor) {
+    let height = usize::from(area.height);
+    let lines = laid_out.lines();
+    let (scroll, cursor) = laid_out.placed(scroll, more.len(), height);
+    let cursor_lines = laid_out
+        .block_of(cursor)
+        .and_then(|block| laid_out.entry(block))
+        .map(|entry| entry.lines.clone())
+        .unwrap_or_default();
+    let accent = accent(app, KeysAt::Detail);
+    let shown: Vec<Line> = lines
+        .iter()
+        .chain(more)
+        .enumerate()
+        .skip(scroll.top())
+        .take(height)
+        .map(|(index, line)| {
+            let bar = if cursor_lines.contains(&index) {
+                selection_bar(accent)
+            } else {
+                Span::raw(" ")
+            };
+            let entry = laid_out
+                .entry_at(index)
+                .and_then(|block| laid_out.entry(block))
+                .filter(|entry| entry.lines.start == index);
+            let chevron = match entry.map(|entry| entry.extent) {
+                Some(Extent::Abridged) => "▸ ",
+                Some(Extent::Full) => "▾ ",
+                Some(Extent::Whole) | None => "  ",
+            };
+            let mut line = line.clone();
+            line.spans
+                .splice(0..0, [bar, themed(chevron, theme::text_dimmed())]);
+            line
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(shown), padded(area));
+    let last_top = (lines.len() + more.len()).saturating_sub(height);
+    draw_position(frame, area, scroll.top(), last_top, app.base);
+    (scroll, cursor)
 }
 
 /// Draws `text` wrapped to `area` without its last column at `scroll`, kept to what the text

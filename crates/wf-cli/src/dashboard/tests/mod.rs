@@ -18,4 +18,5 @@ mod pointer;
 mod refresh;
 mod restart;
 mod support;
+mod transcript;
 mod warnings;

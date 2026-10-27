@@ -109,6 +109,25 @@ impl App {
             }
             return None;
         }
+        // On a transcript the cursor goes to the entry clicked; on its first line, the one with
+        // the chevron, the entry opens or closes.
+        if let Some(Opened {
+            detail: Detail::Session(session),
+            ..
+        }) = self.on_screen()
+            && let Some(pressed) = self
+                .transcript_lines
+                .get_mut(&session)
+                .and_then(|lines| lines.press(position))
+        {
+            if in_detail {
+                self.keys_to_detail();
+            }
+            if pressed.first_line {
+                self.toggle_entry(session, pressed.block);
+            }
+            return None;
+        }
         let clickable = &self.clickable;
         if let Some(list) = &clickable.list
             && list.area.contains(position)
