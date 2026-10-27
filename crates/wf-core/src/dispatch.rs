@@ -183,9 +183,6 @@ impl State {
         item: &Item,
         expired: &BTreeSet<SessionId>,
     ) -> bool {
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return false;
-        };
         let mut claimants = self
             .sessions_of(item.id())
             .filter(|session| session.is_live() && session.role() == SessionRole::Work);
@@ -193,7 +190,7 @@ impl State {
             .next()
             .is_some_and(|first| expired.contains(&first.id()))
             && claimants.all(|claimant| expired.contains(&claimant.id()));
-        item.state(policy) == ItemState::Active
+        item.state() == ItemState::Active
             && held_only_by_expired
             && !item.has_open_blocker()
             && self.unfinished_dependencies(graph, item.id()).is_empty()

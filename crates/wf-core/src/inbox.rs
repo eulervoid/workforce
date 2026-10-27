@@ -131,14 +131,11 @@ impl State {
     /// What waits on the principal, the item changed last first. Permission requests are held by the
     /// daemon and are not part of the state.
     pub fn inbox(&self) -> Vec<InboxEntry> {
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return Vec::new();
-        };
         let merges = self.pending_merges();
         let finished = self.finished_reviews();
         let mut entries: Vec<_> = self
             .live_items()
-            .filter(|item| item.state(policy) == ItemState::Review)
+            .filter(|item| item.state() == ItemState::Review)
             .filter_map(|item| {
                 let waiting = match self.review_status(item.id()) {
                     // Agent steps that are open come first: the principal is waited for only
@@ -193,7 +190,7 @@ impl State {
             })
             .collect();
         for item in self.live_items() {
-            let roles = match item.state(policy) {
+            let roles = match item.state() {
                 ItemState::Open | ItemState::Active => {
                     vec![SessionRole::Work, SessionRole::Supervise]
                 }

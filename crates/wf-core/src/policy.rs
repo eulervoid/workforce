@@ -28,12 +28,6 @@ pub enum PolicyError {
         type_name: TypeName,
         state: ItemState,
     },
-    #[error(
-        "type `{0}` names its states the old way; list the states it uses, such as \
-         `initial = \"open\"` and `states = [\"draft\", \"open\", \"done\"]`, \
-         from draft, open, active, review, done and cancelled"
-    )]
-    OldStates(TypeName),
     #[error("type `{0}` uses `active` but not `open`, to return to")]
     ActiveWithoutOpen(TypeName),
     #[error("type `{type_name}` may depend on unknown type `{target}`")]
@@ -95,13 +89,6 @@ pub enum Field {
     Requires,
 }
 
-/// `transitions = "any"`, which policies already in the log say: it was the only value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum Transitions {
-    Any,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TypeConfig {
@@ -111,13 +98,9 @@ pub struct TypeConfig {
     #[serde(default)]
     pub depends_on: Vec<TypeName>,
     /// The state items of the type are created in, unless they are created as drafts.
-    #[serde(deserialize_with = "written_states::initial")]
     pub initial: ItemState,
     /// The states items of the type may be moved to.
-    #[serde(deserialize_with = "written_states::deserialize")]
     pub states: BTreeSet<ItemState>,
-    #[serde(default)]
-    transitions: Option<Transitions>,
     /// The review level of items of this type that do not name one.
     #[serde(default)]
     pub review: Option<ReviewLevelName>,
@@ -254,7 +237,7 @@ pub enum ReviewStep {
 #[serde(deny_unknown_fields)]
 pub struct ReviewLevelConfig {
     pub name: ReviewLevelName,
-    #[serde(deserialize_with = "written_steps::deserialize")]
+    #[serde(deserialize_with = "review_steps::deserialize")]
     pub steps: Vec<Vec<ReviewStep>>,
     /// How many rounds of changes requested by agent reviews send an item back to work before
     /// the principal decides; without it, every round does.
@@ -262,10 +245,10 @@ pub struct ReviewLevelConfig {
     pub max_rounds: Option<NonZeroU32>,
 }
 
-/// How a policy writes review steps. Policies already in the log write an agent step as
-/// `{ agent = { requires } }` and the principal as `"human"`; postcard, which carries the policy
-/// between the daemon and the CLI, has the plain form of the enum.
-mod written_steps {
+/// How a policy writes review steps: an agent step as a table, the principal as `"principal"`;
+/// postcard, which carries the policy between the daemon and the CLI, has the plain form of the
+/// enum.
+mod review_steps {
     use std::collections::BTreeSet;
 
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -294,20 +277,8 @@ mod written_steps {
     }
 
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct StoredAgentStep {
-        agent: StoredRequires,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct StoredRequires {
-        requires: BTreeSet<Requirement>,
-    }
-
-    #[derive(Deserialize)]
     enum PrincipalWord {
-        #[serde(rename = "principal", alias = "human")]
+        #[serde(rename = "principal")]
         Principal,
     }
 
@@ -315,7 +286,6 @@ mod written_steps {
     #[serde(untagged)]
     enum Written {
         Principal(PrincipalWord),
-        Stored(StoredAgentStep),
         Agent(AgentStep),
     }
 
@@ -377,13 +347,6 @@ mod written_steps {
             }
             Ok(match Written::deserialize(deserializer)? {
                 Written::Principal(PrincipalWord::Principal) => ReviewStep::Principal,
-                Written::Stored(StoredAgentStep {
-                    agent: StoredRequires { requires },
-                }) => ReviewStep::Agent {
-                    name: None,
-                    requires,
-                    instructions: None,
-                },
                 Written::Agent(AgentStep {
                     name,
                     requires,
@@ -466,37 +429,11 @@ impl Policy {
         &DEFAULT_POLICY
     }
 
-    /// Parses and validates policy text. Policies already in the log may name states the old
-    /// way; [`Policy::parse_new`] refuses that for a policy about to be written.
+    /// Parses and validates policy text.
     pub fn parse(source: &str) -> Result<Policy, PolicyError> {
-        let mut policy: Policy =
+        let policy: Policy =
             toml::from_str(source).map_err(|error| PolicyError::Parse(error.to_string()))?;
-        let written: written_states::WrittenTypes =
-            toml::from_str(source).map_err(|error| PolicyError::Parse(error.to_string()))?;
-        for (name, states) in &written.types {
-            if let (Some(config), Some(initial)) =
-                (policy.types.get_mut(name), states.old_initial())
-            {
-                config.initial = initial;
-            }
-        }
         policy.validate()?;
-        Ok(policy)
-    }
-
-    /// Parses policy text that is about to be written: like [`Policy::parse`], but the states
-    /// have to be named the current way.
-    pub fn parse_new(source: &str) -> Result<Policy, PolicyError> {
-        let policy = Policy::parse(source)?;
-        let written: written_states::WrittenTypes =
-            toml::from_str(source).map_err(|error| PolicyError::Parse(error.to_string()))?;
-        if let Some((name, _)) = written
-            .types
-            .iter()
-            .find(|(_, states)| !states.is_current())
-        {
-            return Err(PolicyError::OldStates(name.clone()));
-        }
         Ok(policy)
     }
 
@@ -632,114 +569,6 @@ impl Policy {
     }
 }
 
-/// How a policy lists the states of a type. Policies already in the log list them the old way,
-/// as `{ name, category }` tables, where the category is the state; postcard, which carries the
-/// policy between the daemon and the CLI, always has the current form.
-mod written_states {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use serde::{Deserialize, Deserializer};
-
-    use crate::item::ItemState;
-    use crate::name::TypeName;
-
-    /// An old name the old list of states does not resolve reads as `draft`; see
-    /// [`TypeStates::old_initial`].
-    pub(super) fn initial<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<ItemState, D::Error> {
-        if !deserializer.is_human_readable() {
-            return ItemState::deserialize(deserializer);
-        }
-        let name = String::deserialize(deserializer)?;
-        Ok(ItemState::from_written(&name).unwrap_or(ItemState::Draft))
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<BTreeSet<ItemState>, D::Error> {
-        if !deserializer.is_human_readable() {
-            return BTreeSet::deserialize(deserializer);
-        }
-        let listed = Vec::<Listed>::deserialize(deserializer)?;
-        listed
-            .into_iter()
-            .map(|listed| match listed {
-                Listed::State(name) => ItemState::from_written(&name)
-                    .ok_or_else(|| serde::de::Error::custom(crate::item::ItemStateError(name))),
-                Listed::Old { category, .. } => Ok(category.state()),
-            })
-            .collect()
-    }
-
-    /// A state by name, old names too, or an old `{ name, category }` table.
-    #[derive(Clone, Deserialize)]
-    #[serde(untagged)]
-    enum Listed {
-        State(String),
-        Old { name: String, category: Category },
-    }
-
-    #[derive(Clone, Copy, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    enum Category {
-        Inactive,
-        Open,
-        Active,
-        Review,
-        Done,
-        Cancelled,
-    }
-
-    impl Category {
-        fn state(self) -> ItemState {
-            match self {
-                Category::Inactive => ItemState::Draft,
-                Category::Open => ItemState::Open,
-                Category::Active => ItemState::Active,
-                Category::Review => ItemState::Review,
-                Category::Done => ItemState::Done,
-                Category::Cancelled => ItemState::Cancelled,
-            }
-        }
-    }
-
-    /// The names of the states of every type, as written.
-    #[derive(Deserialize)]
-    pub(super) struct WrittenTypes {
-        pub(super) types: BTreeMap<TypeName, TypeStates>,
-    }
-
-    #[derive(Deserialize)]
-    pub(super) struct TypeStates {
-        initial: String,
-        states: Vec<toml::Value>,
-        transitions: Option<toml::Value>,
-    }
-
-    impl TypeStates {
-        /// The initial state of an old list of states: the category of the state it names.
-        pub(super) fn old_initial(&self) -> Option<ItemState> {
-            self.states.iter().find_map(|state| {
-                let Listed::Old { name, category } = state.clone().try_into().ok()? else {
-                    return None;
-                };
-                (name == self.initial).then(|| category.state())
-            })
-        }
-
-        pub(super) fn is_current(&self) -> bool {
-            let current = |name: &str| name.parse::<ItemState>().is_ok();
-            self.transitions.is_none()
-                && current(&self.initial)
-                && self
-                    .states
-                    .iter()
-                    .all(|state| state.as_str().is_some_and(current))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,25 +617,6 @@ mod tests {
         );
     }
 
-    const OLD_DEFAULT_POLICY: &str = include_str!("tests/old_default_policy.toml");
-
-    #[test]
-    fn policies_with_the_old_states_still_parse_but_are_not_written() {
-        let old = Policy::parse(OLD_DEFAULT_POLICY).unwrap();
-        let decision = old.type_config(&type_name("decision")).unwrap();
-        assert_eq!(decision.initial, ItemState::Review);
-        let distill = old.type_config(&type_name("distill")).unwrap();
-        assert!(!distill.uses(ItemState::Cancelled));
-        assert_eq!(
-            Policy::parse_new(OLD_DEFAULT_POLICY),
-            Err(PolicyError::OldStates(type_name("decision")))
-        );
-        assert_eq!(
-            &Policy::parse_new(DEFAULT_POLICY_TOML).unwrap(),
-            Policy::default_policy()
-        );
-    }
-
     #[test]
     fn stored_policies_with_assignment_and_lane_claims_still_parse() {
         let source = DEFAULT_POLICY_TOML.replace(
@@ -819,22 +629,35 @@ mod tests {
     #[test]
     fn custom_types_are_accepted() {
         let source = format!(
-            "{DEFAULT_POLICY_TOML}\n[types.bug]\nlane = \"default\"\ninitial = \"new\"\n\
-             states = [{{ name = \"new\", category = \"open\" }}, {{ name = \"fixed\", category = \"done\" }}]\n"
+            "{DEFAULT_POLICY_TOML}\n[types.bug]\nlane = \"default\"\ninitial = \"open\"\n\
+             states = [\"open\", \"done\"]\n"
         );
         let policy = Policy::parse(&source).unwrap();
         let bug = policy.type_config(&type_name("bug")).unwrap();
-        // The initial state is the category of the old state it names.
         assert_eq!(bug.initial, ItemState::Open);
         assert_eq!(
             bug.states,
             BTreeSet::from([ItemState::Open, ItemState::Done])
         );
-        let current = format!(
-            "{DEFAULT_POLICY_TOML}\n[types.bug]\nlane = \"default\"\ninitial = \"open\"\n\
-             states = [\"open\", \"done\"]\n"
-        );
-        assert!(Policy::parse_new(&current).is_ok());
+    }
+
+    #[test]
+    fn states_named_the_old_way_are_refused() {
+        for custom in [
+            "[types.bug]\nlane = \"default\"\ninitial = \"new\"\n\
+             states = [{ name = \"new\", category = \"open\" }]\n",
+            "[types.bug]\nlane = \"default\"\ninitial = \"open\"\nstates = [\"in_progress\"]\n",
+            "[types.bug]\nlane = \"default\"\ninitial = \"open\"\nstates = [\"open\"]\n\
+             transitions = \"any\"\n",
+        ] {
+            assert!(
+                matches!(
+                    Policy::parse(&with_custom(custom)),
+                    Err(PolicyError::Parse(_))
+                ),
+                "{custom}"
+            );
+        }
     }
 
     #[test]
@@ -878,17 +701,6 @@ mod tests {
                 type_name: type_name("bug"),
                 state: ItemState::Draft
             })
-        );
-        let unknown = with_custom(
-            "[types.bug]\nlane = \"default\"\ninitial = \"ghost\"\nstates = [\"open\"]\n",
-        );
-        assert!(matches!(
-            Policy::parse(&unknown),
-            Err(PolicyError::InitialNotInStates { .. })
-        ));
-        assert_eq!(
-            Policy::parse_new(&unknown.replace("\"open\"]", "\"draft\"]")),
-            Err(PolicyError::OldStates(type_name("bug")))
         );
     }
 
@@ -994,28 +806,20 @@ mod tests {
     }
 
     #[test]
-    fn stored_policies_that_name_the_human_step_still_parse() {
-        let old = DEFAULT_POLICY_TOML.replace(
-            "name = \"manual\"\nsteps = [\"principal\"]",
-            "name = \"manual\"\nsteps = [\"human\"]",
-        );
-        assert!(old.contains("[\"human\"]"));
-        let policy = Policy::parse(&old).unwrap();
-        let manual = policy
-            .review_level(&ReviewLevelName::new("manual").unwrap())
-            .unwrap();
-        assert_eq!(manual.steps, [vec![ReviewStep::Principal]]);
-    }
-
-    #[test]
-    fn stored_policies_that_write_an_agent_step_the_old_way_still_parse() {
-        let old = DEFAULT_POLICY_TOML.replace(
-            "steps = [{ requires = [\"review\"] }]",
-            "steps = [{ agent = { requires = [\"review\"] } }]",
-        );
-        assert!(old.contains("agent = {"));
-        let policy = Policy::parse(&old).unwrap();
-        assert_eq!(policy.review, Policy::default_policy().review);
+    fn review_steps_written_the_old_way_are_refused() {
+        for old in [
+            DEFAULT_POLICY_TOML.replace(
+                "name = \"manual\"\nsteps = [\"principal\"]",
+                "name = \"manual\"\nsteps = [\"human\"]",
+            ),
+            DEFAULT_POLICY_TOML.replace(
+                "steps = [{ requires = [\"review\"] }]",
+                "steps = [{ agent = { requires = [\"review\"] } }]",
+            ),
+        ] {
+            assert_ne!(old, DEFAULT_POLICY_TOML);
+            assert!(matches!(Policy::parse(&old), Err(PolicyError::Parse(_))));
+        }
     }
 
     #[test]

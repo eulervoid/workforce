@@ -152,10 +152,9 @@ pub fn carry_out(
 fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let state = workspace.state();
     state.ensure_takeable(item, &SessionRole::Work, workspace.device_key())?;
-    let policy = &state.policy().expect("a workforce has a policy").policy;
     let draft = matches!(
         state.item(item),
-        Some(ItemEntry::Live(live)) if live.state(policy) == ItemState::Draft
+        Some(ItemEntry::Live(live)) if live.state() == ItemState::Draft
     );
     let principal = workspace.principal();
     let default = state
@@ -196,7 +195,7 @@ fn states(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let config = policy
         .type_config(live.item_type())
         .ok_or_else(|| anyhow!("no item type `{}` in the policy", live.item_type()))?;
-    let current = live.state(policy);
+    let current = live.state();
     let states: Vec<ItemState> = [
         ItemState::Draft,
         ItemState::Open,
@@ -257,7 +256,7 @@ fn move_item(workspace: &mut Workspace, item: ItemId, state: ItemState) -> anyho
     };
     workspace.author(EventBody::ItemMoved(ItemMoved {
         item,
-        to: state.into(),
+        to: state,
         by_session: None,
         because: None,
     }))?;

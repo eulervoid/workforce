@@ -1410,7 +1410,7 @@ async fn a_session_left_live_by_an_earlier_daemon_is_interrupted_when_the_next_o
             .author(wf_core::event::EventBody::ItemMoved(
                 wf_core::event::ItemMoved {
                     item: id,
-                    to: wf_core::item::ItemState::Active.into(),
+                    to: wf_core::item::ItemState::Active,
                     by_session: None,
                     because: None,
                 },
@@ -2899,7 +2899,7 @@ wf review --approve
                 let EventBody::ItemMoved(moved) = &event.content.body else {
                     return None;
                 };
-                (moved.to.state() == ItemState::Open).then_some(moved)
+                (moved.to == ItemState::Open).then_some(moved)
             })
             .expect("the move back to open");
         assert_eq!(moved.because, Some(CommentId::from(events[conflict].id())));
@@ -3545,7 +3545,7 @@ hang
     assert!(refused.to_string().contains("review"), "{refused}");
     let finish = EventBody::ItemMoved(ItemMoved {
         item,
-        to: ItemState::Done.into(),
+        to: ItemState::Done,
         by_session: None,
         because: None,
     });

@@ -5,7 +5,7 @@ expression: "Envelope::new(&detail)"
 {
   "schema": 9,
   "data": {
-    "id": "qkmy6cme3eheb5cwp4a2hfe6agvemcszfwo3nri7dm2kl2vs5n2q",
+    "id": "n2vg4lqdbdmkpqarrb7wuislbqwmg5dv2hkyfzvgr65esvr3biaq",
     "type": "task",
     "title": "Pick a hash for event ids",
     "state": "open",
@@ -14,7 +14,7 @@ expression: "Envelope::new(&detail)"
     "blocked_by": [],
     "blocking": [
       {
-        "id": "zgt62loygs4iynj2kw3uv764p6olubtqvb2mgmnr3lpc5wk7uoqa",
+        "id": "2lbfpsoalq4p2o3u4wyylr3p7gehgnkukhykd4y3gxujvsfswoeq",
         "type": "task",
         "title": "Implement feed sync",
         "state": "open",
@@ -47,7 +47,7 @@ expression: "Envelope::new(&detail)"
     "depends_on": [],
     "required_by": [
       {
-        "id": "zgt62loygs4iynj2kw3uv764p6olubtqvb2mgmnr3lpc5wk7uoqa",
+        "id": "2lbfpsoalq4p2o3u4wyylr3p7gehgnkukhykd4y3gxujvsfswoeq",
         "type": "task",
         "title": "Implement feed sync",
         "state": "open",
@@ -58,7 +58,7 @@ expression: "Envelope::new(&detail)"
     "references": [],
     "referenced_by": [
       {
-        "item": "zgt62loygs4iynj2kw3uv764p6olubtqvb2mgmnr3lpc5wk7uoqa",
+        "item": "2lbfpsoalq4p2o3u4wyylr3p7gehgnkukhykd4y3gxujvsfswoeq",
         "title": "Implement feed sync",
         "comment": null
       }
@@ -83,7 +83,7 @@ expression: "Envelope::new(&detail)"
           "label": "@ada"
         },
         "kind": "referenced_in",
-        "summary": "referenced in #zgt62l",
+        "summary": "referenced in #2lbfps",
         "comment": null,
         "text": null
       },
@@ -94,7 +94,7 @@ expression: "Envelope::new(&detail)"
           "label": "@ada"
         },
         "kind": "dependent",
-        "summary": "#zgt62l now depends on this",
+        "summary": "#2lbfps now depends on this",
         "comment": null,
         "text": null
       },
@@ -105,7 +105,7 @@ expression: "Envelope::new(&detail)"
           "label": "@ada"
         },
         "kind": "referenced_in",
-        "summary": "referenced in #zgt62l",
+        "summary": "referenced in #2lbfps",
         "comment": null,
         "text": null
       }

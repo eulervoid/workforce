@@ -108,7 +108,7 @@ impl Daemon {
                 id: item.to_base32(),
                 title: live.title().to_string(),
                 item_type: live.item_type().to_string(),
-                state: live.state(policy).to_string(),
+                state: live.state().to_string(),
             },
             ItemEntry::Archived(_) => return Err(SessionError::Archived(item)),
         };

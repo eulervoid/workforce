@@ -130,7 +130,11 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         Command::Daemon(command) => crate::daemon::daemon(json, command, data),
         // `main` runs it before anything else.
         Command::GitBridge => Ok(wf_daemon::run_git_bridge()?),
-        Command::Import { file } => crate::export::import(json, &file, &data),
+        Command::Import {
+            file,
+            resign: false,
+        } => crate::export::import(json, &file, &data),
+        Command::Import { file, resign: true } => crate::resign::import(json, &file, &data, cwd),
         Command::Permissions(command) => crate::permissions::permissions(json, command, cwd),
         Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
         Command::Status { refold } => {

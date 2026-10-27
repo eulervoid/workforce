@@ -114,6 +114,33 @@ fn scan(text: &str, tokens: &mut Vec<Token>) {
     }
 }
 
+/// `text` with each `#item` or `#item/comment` reference that `rewrite` gives a new form for
+/// written in that form, wherever the scanner of [`parse`] would find one, in code too.
+pub(crate) fn rewrite_item_refs(text: &str, rewrite: impl Fn(&Token) -> Option<String>) -> String {
+    let mut rewritten = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut previous = None;
+    for (start, character) in text.char_indices() {
+        let at_boundary = is_boundary_before(previous);
+        previous = Some(character);
+        if character != '#' || !at_boundary || start < copied {
+            continue;
+        }
+        let rest = &text[start + 1..];
+        let (Some(token), consumed) = parse_item_ref(rest) else {
+            continue;
+        };
+        if let Some(new) = rewrite(&token) {
+            rewritten.push_str(&text[copied..start]);
+            rewritten.push('#');
+            rewritten.push_str(&new);
+            copied = start + 1 + consumed;
+        }
+    }
+    rewritten.push_str(&text[copied..]);
+    rewritten
+}
+
 fn run_length(text: &str, allowed: impl Fn(char) -> bool) -> usize {
     text.char_indices()
         .find(|(_, character)| !allowed(*character))
@@ -190,6 +217,24 @@ fn parse_mention(rest: &str) -> (Option<Token>, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn item_references_are_rewritten_where_they_are_found() {
+        let rewritten = rewrite_item_refs(
+            "see #abcd, #abcd/efgh and (#abcd); not a#abcd or #wxyz\n```\n#abcd\n```",
+            |token| match token {
+                Token::ItemRef(item) if item == "abcd" => Some("k3f9a2".into()),
+                Token::CommentRef { item, comment } if item == "abcd" && comment == "efgh" => {
+                    Some("k3f9a2/c7f2".into())
+                }
+                Token::ItemRef(_) | Token::CommentRef { .. } | Token::Mention(_) => None,
+            },
+        );
+        assert_eq!(
+            rewritten,
+            "see #k3f9a2, #k3f9a2/c7f2 and (#k3f9a2); not a#abcd or #wxyz\n```\n#k3f9a2\n```"
+        );
+    }
 
     fn item(prefix: &str) -> Token {
         Token::ItemRef(prefix.to_string())

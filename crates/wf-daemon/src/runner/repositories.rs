@@ -59,16 +59,16 @@ impl Daemon {
         let Ok(state) = self.snapshot(loaded).await else {
             return;
         };
-        // Without a policy, which a workforce taken in from another device lacks at first, no
+        // Without a genesis, which a workforce taken in from another device lacks at first, no
         // item is known to be unfinished, so nothing can be told stray.
-        let Some(policy) = state.policy().map(|config| &config.policy) else {
+        if state.workforce_id().is_none() {
             return;
-        };
+        }
         let workforce_directory = self.workforce_directory(workforce);
         let mut kept = self.busy_directories(workforce, &state);
         for view in state.items() {
             match view {
-                ItemEntry::Live(item) if !item.state(policy).is_terminal() => {
+                ItemEntry::Live(item) if !item.state().is_terminal() => {
                     kept.insert(item_repository(&workforce_directory, item.id()));
                 }
                 ItemEntry::Live(_) | ItemEntry::Archived(_) => {}

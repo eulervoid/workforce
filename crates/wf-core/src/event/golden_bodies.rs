@@ -1,11 +1,10 @@
-//! Every body tag decodes from the bytes earlier versions wrote.
+//! Every body tag decodes from the bytes this event version writes.
 //!
-//! `golden_bodies.txt` holds, per tag in `mod tag`, one whole event as the version that added the
-//! tag wrote it, as `<tag> <hex>`. It is only ever appended to: a new tag adds a line, and an
-//! existing line never changes, not even when the layout of a body does. A change that makes a
-//! line fail to decode would make every stored event of that tag fail, so it must instead take a
-//! new tag and keep decoding the old one. Lines are made with
-//! `cargo test -p wf-core print_golden_bodies -- --ignored --nocapture` and are copied in once.
+//! `golden_bodies.txt` holds, per tag in `mod tag`, one whole event as `<tag> <hex>`. A line
+//! never changes while the event version stays: a change that makes one fail to decode would make
+//! every stored event of that tag fail. Until v1 such a change is a format break instead: a new
+//! event version, a new file, and `wf import --resign` for the logs written before (SPEC §17.7).
+//! Lines are made with `cargo test -p wf-core print_golden_bodies -- --ignored --nocapture`.
 
 use super::*;
 use crate::identity::{InviteSigner, PrincipalSigner};
@@ -13,39 +12,28 @@ use crate::name::{Handle, ReviewStepName};
 
 const FIXTURE: &str = include_str!("golden_bodies.txt");
 
-/// Every tag of `mod tag` (24 is retired). A tag missing here is not covered; the test below fails for one
-/// that has no line.
-const ALL_TAGS: [u16; 32] = [
+/// Every tag of `mod tag`. A tag missing here is not covered; the test below fails for one that
+/// has no line.
+const ALL_TAGS: [u16; 21] = [
     tag::GENESIS,
     tag::POLICY_SET,
     tag::AGENT_DEFINED,
+    tag::AGENT_REMOVED,
     tag::INVITE_CREATED,
     tag::DEVICE_BOUND,
     tag::DEVICE_PROFILE,
     tag::FORK_ANNOUNCED,
-    tag::AGENT_REMOVED,
-    tag::ITEM_CREATED_WITHOUT_STATE,
+    tag::ITEM_CREATED,
     tag::ITEM_EDITED,
     tag::ITEM_MOVED,
     tag::ITEM_LINKED,
     tag::ITEM_ARCHIVED,
     tag::ITEM_UNARCHIVED,
-    tag::COMMENT,
-    tag::ITEM_CREATED,
+    tag::COMMENTED,
     tag::SESSION_STARTED,
-    tag::SESSION_ENDED_WITHOUT_COMMENT,
-    tag::REVIEW,
-    tag::MERGED,
     tag::SESSION_ENDED,
-    tag::COMMENT_ON_LINES,
-    tag::COMMENT_CHECK_FAILURE,
-    tag::BOUND_POLICY_SET,
-    tag::SESSION_STARTED_FOR_STEP,
-    tag::COMMENT_WITH_HEAD,
-    tag::SESSION_ENDED_WITH_HEAD,
-    tag::SESSION_ENDED_CLAIM_LOST,
-    tag::REVIEW_AT_ROUND_LIMIT,
-    tag::MERGED_ONTO,
+    tag::REVIEWED,
+    tag::MERGED,
     tag::TARGET_MOVED,
     tag::MERGE_CLAIMED,
 ];
@@ -116,18 +104,6 @@ fn bodies() -> Vec<EventBody> {
         devices: vec![device.key()],
         previous: vec![],
     };
-    let plain_comment = Commented::plain(item, "why");
-    let created = ItemCreated {
-        item_type: TypeName::new("task").unwrap(),
-        title: "t".into(),
-        body: "- [ ] step".into(),
-        priority: Some(Priority::P2),
-        lane: Some(LaneName::new("backend").unwrap()),
-        labels: vec![Label::new("db").unwrap()],
-        requires: vec![Requirement::new("gpu").unwrap()],
-        review: Some(ReviewLevelName::new("strict").unwrap()),
-        state: None,
-    };
     fn signed_by<T: Serialize>(
         principal: &PrincipalSigner,
         workforce: WorkforceId,
@@ -158,13 +134,6 @@ fn bodies() -> Vec<EventBody> {
             workforce,
             PolicySet {
                 policy: "[merge]\ntarget = \"trunk\"\n".into(),
-            },
-        )),
-        EventBody::BoundPolicySet(signed_by(
-            &principal,
-            workforce,
-            BoundPolicySet {
-                policy: "[merge]\ntarget = \"trunk\"\n".into(),
                 hlc: Hlc::next_after(Hlc::ZERO, 1_000).unwrap(),
             },
         )),
@@ -176,6 +145,9 @@ fn bodies() -> Vec<EventBody> {
             lanes: vec![LaneName::new("backend").unwrap()],
             autonomy: Autonomy::default(),
             instructions: Some("Be brief.".into()),
+        }),
+        EventBody::AgentRemoved(AgentRemoved {
+            name: agent.clone(),
         }),
         EventBody::InviteCreated(signed_by(
             &principal,
@@ -206,17 +178,24 @@ fn bodies() -> Vec<EventBody> {
                 members: vec![principal.key()],
             },
         )),
-        EventBody::AgentRemoved(AgentRemoved {
-            name: agent.clone(),
+        EventBody::ItemCreated(ItemCreated {
+            item_type: TypeName::new("task").unwrap(),
+            title: "t".into(),
+            body: "- [ ] step".into(),
+            priority: Some(Priority::P2),
+            lane: Some(LaneName::new("backend").unwrap()),
+            labels: vec![Label::new("db").unwrap()],
+            requires: vec![Requirement::new("gpu").unwrap()],
+            review: Some(ReviewLevelName::new("strict").unwrap()),
+            state: ItemState::Draft,
         }),
-        EventBody::ItemCreated(created.clone()),
         EventBody::ItemEdited(ItemEdited {
             item,
             changes: vec![Change::Title("new".into()), Change::Priority(None)],
         }),
         EventBody::ItemMoved(ItemMoved {
             item,
-            to: WrittenState::as_written("in_progress"),
+            to: ItemState::Active,
             by_session: Some(session),
             because: Some(comment),
         }),
@@ -226,18 +205,21 @@ fn bodies() -> Vec<EventBody> {
         }),
         EventBody::ItemArchived(ItemRef { item }),
         EventBody::ItemUnarchived(ItemRef { item }),
-        EventBody::Commented(plain_comment.clone()),
-        EventBody::ItemCreated(ItemCreated {
-            state: Some(ItemState::Draft.into()),
-            ..created
-        }),
-        EventBody::SessionStarted(SessionStarted {
-            agent: agent.clone(),
+        EventBody::Commented(Commented {
             item,
-            role: SessionRole::Review {
-                commit: Some(commit),
-                step: None,
-            },
+            text: "why".into(),
+            kind: CommentKind::ChangeRequest,
+            resolves: vec![comment],
+            step: Some(StepId::of("step")),
+            lines: Some(LineAnchor {
+                commit,
+                path: "src/lib.rs".into(),
+                side: DiffSide::New,
+                first: 12,
+                last: 13,
+                quote: "+fn f() {}".into(),
+            }),
+            head: Some(commit),
         }),
         EventBody::SessionStarted(SessionStarted {
             agent: agent.clone(),
@@ -249,59 +231,9 @@ fn bodies() -> Vec<EventBody> {
         }),
         EventBody::SessionEnded(SessionEnded {
             session,
-            reason: EndReason::Released,
-            because: None,
-            head: None,
-        }),
-        EventBody::Reviewed(Reviewed {
-            item,
-            commit: Some(commit),
-            verdict: Verdict::RequestChanges,
-            because: Some(comment),
-            round_limit_reached: None,
-        }),
-        EventBody::Merged(Merged {
-            item,
-            reviewed: commit,
-            commit,
-            onto: None,
-        }),
-        EventBody::SessionEnded(SessionEnded {
-            session,
-            reason: EndReason::Released,
-            because: Some(comment),
-            head: None,
-        }),
-        EventBody::Commented(Commented {
-            lines: Some(LineAnchor {
-                commit,
-                path: "src/lib.rs".into(),
-                side: DiffSide::New,
-                first: 12,
-                last: 13,
-                quote: "+fn f() {}".into(),
-            }),
-            ..plain_comment.clone()
-        }),
-        EventBody::Commented(Commented {
-            kind: CommentKind::CheckFailure,
-            ..plain_comment.clone()
-        }),
-        EventBody::Commented(Commented {
-            head: Some(commit),
-            ..plain_comment
-        }),
-        EventBody::SessionEnded(SessionEnded {
-            session,
-            reason: EndReason::Released,
+            reason: EndReason::Submitted,
             because: Some(comment),
             head: Some(commit),
-        }),
-        EventBody::SessionEnded(SessionEnded {
-            session,
-            reason: EndReason::LeaseExpired,
-            because: None,
-            head: None,
         }),
         EventBody::Reviewed(Reviewed {
             item,
@@ -326,7 +258,7 @@ fn bodies() -> Vec<EventBody> {
 
 /// Prints the lines for `golden_bodies.txt` as the current version writes them.
 #[test]
-#[ignore = "prints; run by hand when a tag is added"]
+#[ignore = "prints; run by hand for a new event version"]
 fn print_golden_bodies() {
     let principal = PrincipalSigner::from_bytes(&[1; 32]).unwrap();
     let device = DeviceSigner::from_bytes(&[2; 32]).unwrap();

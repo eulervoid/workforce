@@ -127,13 +127,10 @@ impl State {
         graph: &DependencyGraph,
         item: ItemId,
     ) -> Vec<UnfinishedDependency> {
-        let Some(policy) = self.policy() else {
-            return Vec::new();
-        };
         graph
             .depends_on(item)
             .filter_map(|dependency| {
-                let state = self.item(dependency).map(|view| view.state(&policy.policy));
+                let state = self.item(dependency).map(|view| view.state());
                 (state != Some(ItemState::Done)).then_some(UnfinishedDependency {
                     item: dependency,
                     state,
@@ -144,8 +141,7 @@ impl State {
 
     /// Where an open item stands with its dependencies; `None` for items that are not open.
     pub fn readiness(&self, graph: &DependencyGraph, item: &Item) -> Option<Readiness> {
-        let policy = self.policy()?;
-        if item.archived_at().is_some() || item.state(&policy.policy) != ItemState::Open {
+        if item.archived_at().is_some() || item.state() != ItemState::Open {
             return None;
         }
         let unfinished = self.unfinished_dependencies(graph, item.id());

@@ -39,12 +39,11 @@ pub struct LinkView {
 
 fn link_view(state: &State, id: ItemId, ignored: bool) -> LinkView {
     let view = state.item(id).expect("linked items exist");
-    let policy = &state.policy().expect("a workforce has a policy").policy;
     LinkView {
         id,
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
-        state: view.state(policy),
+        state: view.state(),
         ignored,
     }
 }
@@ -807,20 +806,15 @@ pub fn item_detail(
 ) -> ItemDetail {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut flags = Vec::new();
-    if let Some(name) = item.unknown_state() {
-        flags.push(format!(
-            "unknown state `{name}`, so it counts as a draft; `wf item open` or `wf item cancel` it"
-        ));
-    }
     match policy.type_config(item.item_type()) {
         None => flags.push(format!(
             "unknown type `{}` under the current policy",
             item.item_type()
         )),
-        Some(config) if !config.uses(item.state(policy)) => flags.push(format!(
+        Some(config) if !config.uses(item.state()) => flags.push(format!(
             "a {} is no longer `{}` under the current policy; move it on",
             item.item_type(),
-            item.state(policy)
+            item.state()
         )),
         Some(_) => {}
     }

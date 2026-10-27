@@ -7,7 +7,7 @@ expression: "Envelope::new(&found)"
   "data": [
     {
       "item": {
-        "id": "zgt62loygs4iynj2kw3uv764p6olubtqvb2mgmnr3lpc5wk7uoqa",
+        "id": "2lbfpsoalq4p2o3u4wyylr3p7gehgnkukhykd4y3gxujvsfswoeq",
         "type": "task",
         "title": "Implement feed sync",
         "state": "open",
@@ -15,7 +15,7 @@ expression: "Envelope::new(&found)"
         "readiness": "blocked",
         "blocked_by": [
           {
-            "id": "qkmy6cme3eheb5cwp4a2hfe6agvemcszfwo3nri7dm2kl2vs5n2q",
+            "id": "n2vg4lqdbdmkpqarrb7wuislbqwmg5dv2hkyfzvgr65esvr3biaq",
             "type": "task",
             "title": "Pick a hash for event ids",
             "state": "open",
@@ -43,12 +43,12 @@ expression: "Envelope::new(&found)"
         },
         {
           "field": "comment",
-          "comment": "36tjhyft2vck53qk2gk35zrjkdj2tzja447rrwsefgwxfa25ye3q",
+          "comment": "sqwemosfllp7pgey4ur4h2zaxx5nyhie3jdp4qnuzmremrqmphra",
           "by": {
             "kind": "principal",
             "label": "@ada"
           },
-          "text": "see #qkmy6c, @ada please check",
+          "text": "see #n2vg4l, @ada please check",
           "highlights": [
             [
               25,

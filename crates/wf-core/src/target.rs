@@ -101,9 +101,6 @@ impl State {
     /// its principal that is gone, as `presence` says at `now_ms`, which may never return to. Only
     /// the latest merge of an item counts, so an item merged again since stays done.
     pub fn lost_merges(&self, device: DeviceKey, presence: &Presence, now_ms: u64) -> Vec<ItemId> {
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return Vec::new();
-        };
         let (principal, lease) = (self.principal_of(&device), self.lease());
         let sends_back = |maker: DeviceKey| {
             maker == device
@@ -112,7 +109,7 @@ impl State {
                     && presence.gone(maker, lease, now_ms))
         };
         self.live_items()
-            .filter(|live| live.state(policy) == ItemState::Done)
+            .filter(|live| live.state() == ItemState::Done)
             .filter(|live| {
                 live.all_merges()
                     .max_by_key(|merge| merge.stamp)

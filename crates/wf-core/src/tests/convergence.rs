@@ -138,21 +138,6 @@ impl Simulation {
         let item = self.pick_item(device, first);
         let other = self.pick_item(device, second);
         let types = ["task", "task", "distill", "decision", "bug"];
-        let states = [
-            "backlog",
-            "open",
-            "in_progress",
-            "in_review",
-            "done",
-            "dropped",
-            "answered",
-            "proposed",
-            "ratified",
-            "draft",
-            "active",
-            "review",
-            "cancelled",
-        ];
         let label = Label::new(format!("l{}", second % 3)).unwrap();
         match (operation % 22, item) {
             (0 | 1, _) => {
@@ -203,23 +188,17 @@ impl Simulation {
             }
             (8 | 9, Some(item)) => {
                 let policy = &self.replicas[device].policy().unwrap().policy;
-                let own_states: Vec<String> = policy
+                let own_states: Vec<ItemState> = policy
                     .type_config(self.replicas[device].item(item).unwrap().item_type())
-                    .map(|config| {
-                        config
-                            .states
-                            .iter()
-                            .map(|state| state.name().to_string())
-                            .collect()
-                    })
+                    .map(|config| config.states.iter().copied().collect())
                     .unwrap_or_default();
+                // States the type does not use as well, as a peer with another policy writes them.
                 let state = if own_states.is_empty() || second % 11 == 0 {
-                    states[usize::from(second) % states.len()].to_string()
+                    ItemState::ALL[usize::from(second) % ItemState::ALL.len()]
                 } else {
-                    own_states[usize::from(second) % own_states.len()].clone()
+                    own_states[usize::from(second) % own_states.len()]
                 };
-                // Old names as well, as older peers write them.
-                self.submit(device, moved_as_written(item, &state));
+                self.submit(device, moved(item, state));
             }
             (10, Some(item)) => {
                 if let Some(target) = other {
@@ -262,13 +241,10 @@ impl Simulation {
                 }
             }
             (12, Some(_)) => {
-                let policy = &self.replicas[device].policy().unwrap().policy;
                 let eligible: Vec<ItemId> = self.replicas[device]
                     .items()
                     .filter(|view| match view {
-                        ItemEntry::Live(item) if second % 2 == 0 => {
-                            item.state(policy).is_terminal()
-                        }
+                        ItemEntry::Live(item) if second % 2 == 0 => item.state().is_terminal(),
                         ItemEntry::Archived(_) => second % 2 == 1,
                         ItemEntry::Live(_) => false,
                     })

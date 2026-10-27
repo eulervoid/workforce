@@ -223,7 +223,7 @@ Each device writes an append-only, gapless feed; events also name what their aut
 ```rust
 struct Event { content: EventContent, sig: Signature }   // device signature
 struct EventContent {
-    v: u16,                          // 1
+    v: u16,                          // 2
     workforce: Option<WorkforceId>,  // None only in genesis
     author: DeviceKey,
     actor: Actor,
@@ -262,9 +262,11 @@ stable across releases, and decode fast (a 100k-event snapshot decodes in about 
 
 Consequences: postcard is not self-describing and field order is part of the format, pinned by
 golden tests. A decoder cannot skip an unknown variant, so bodies are wrapped as `(tag, payload)`.
-**A body whose layout changes gets a new tag**; the old tag stays decodable, and a payload that lacks
-its tag's fields is rejected, so one value keeps one encoding. Ids are always recomputed by
-re-encoding, never taken from received bytes (the decoder does not insist on minimal varints).
+There is **one tag per body**, in its current layout. Until v1, a body whose layout changes is a
+format break (section 17.7): the event version goes up, an event of another version is refused
+before its body is read, and a log of the older version is exported with the old binary and signed
+again with `wf import --resign` (below). Ids are always recomputed by re-encoding, never taken from
+received bytes (the decoder does not insist on minimal varints).
 
 | Type | Encoding |
 |---|---|
@@ -290,35 +292,25 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | Tag | Body | Payload |
 |---|---|---|
 | 1 | `Genesis` | `Signed<Genesis>`: `name`, `founder: MemberSeed`, `members: Vec<MemberSeed>`, `policy` (TOML text), `forked_from: Option<ForkPoint{workforce, heads}>` |
-| 2 | `PolicySet` | `Signed<PolicySet>`: `policy` (TOML text, verbatim); not bound to its event, no longer authored (see tag 28) |
+| 2 | `PolicySet` | `Signed<PolicySet>`: `policy` (TOML text, verbatim), and the `hlc` of the event that carries it, so the signed statement cannot be written into a newer event to roll the policy back |
 | 3 | `AgentDefined` | `name`, `harness`, `model: Option`, `capabilities`, `lanes`, `autonomy{start, nudges, park_timeout, max_duration: Option, permissions}`, `instructions: Option` |
-| 4 | `InviteCreated` | `Signed<InviteCreated>`: `kind` (`Device`), `invite: InviteKey`, `expires_ms` |
-| 5 | `DeviceBound` | `invite: EventId`, `proof` by the invite key |
-| 6 | `DeviceProfile` | `name`, `hardware` (requirements in one string, comma or space separated), `agents: {agent → max_sessions}`, `max_sessions` |
-| 7 | `ForkAnnounced` | `Signed<ForkAnnounced>`: `to: WorkforceId`, `members` |
-| 8 | `AgentRemoved` | `name`: gone until defined again; its sessions stay valid |
-| 10 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires`, `review` (older, without a state) |
-| 11 | `ItemEdited` | `item`, `changes`: `Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires` (set changes), `ReviewLevel`, `StepDone{step, done}`, `RecoveryLevel` |
-| 12 | `ItemMoved` | `item`, `to` (a state name as written), `by_session: Option<SessionId>`, `because: Option<CommentId>` |
-| 13 | `ItemLinked` | `item`, `link`: `DependsOn(SetChange<ItemId>)` or `Supersedes(ItemId)` |
-| 14, 15 | `ItemArchived`, `ItemUnarchived` | `item` |
-| 16 | `Commented` | `item`, `text`, `kind` (`Plain`, `Blocker`, `ChangeRequest`), `resolves: Vec<CommentId>`, `step: Option<StepId>` |
-| 17 | `ItemCreated` | as tag 10, plus `state` |
-| 20 | `SessionStarted` | `agent`, `item`, `role`: `Work`, `Review{commit: Option}`, `Supervise`, `Diagnose` |
-| 21 | `SessionEnded` | `session`, `reason` (section 9) |
-| 22 | `Reviewed` | `item`, `commit: Option` (none: submitted without commits), `verdict` (`Approve`, `RequestChanges`, `Escalate`), `because: Option<CommentId>` |
-| 33 | `Reviewed` | as tag 22, plus `round_limit_reached: u32`, for a `RequestChanges` at the round limit of its level (section 10); a verdict without it keeps tag 22 |
-| 23 | `Merged` | `item`, `reviewed`, `commit` |
-| 34 | `Merged` | as tag 23, plus `onto: CommitId`, the tip of the target it moved from (section 10); a merge found landed in the target, which moved nothing, keeps tag 23 |
-| 35 | `TargetMoved` | `commit`, `onto`: the principal pushed the target from `onto` to `commit` (section 10) |
-| 36 | `MergeClaimed` | `item`, `commit`: the device that writes it makes the merge of the approved `commit` (section 10) |
-| 24 | retired | (`Report`, now a comment) |
-| 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
-| 26 | `Commented` | as tag 16, plus `lines: LineAnchor`, the lines of the diff it is about (section 11); a comment without lines is written under tag 16 |
-| 30 | `Commented` | as tag 16, 26 or 27 (by lines and kind), plus `head: CommitId`, where the branch of the work session that comments was (section 10); a comment without a head keeps its older tag |
-| 31 | `SessionEnded` | as tag 21 or 25, plus `head: CommitId`, where the branch of the work session was when it ended (section 10), for an end other than a submission; a submission is written under tag 21 or 25 with its commit in `Submitted{commit}`, read as the end's head, so ends written before heads keep their bytes, and an end without a head keeps its older tag |
-| 32 | `SessionEnded` | as tag 31, with `head` optional, for the ends that lost their claim (`LeaseExpired`, `Outclaimed`), so peers that predate them carry the event as unknown instead of failing to decode it |
-| 28 | `BoundPolicySet` | `Signed<BoundPolicySet>`: `policy`, and the `hlc` of the event that carries it, so the signed statement cannot be written into a newer event to roll the policy back |
+| 4 | `AgentRemoved` | `name`: gone until defined again; its sessions stay valid |
+| 5 | `InviteCreated` | `Signed<InviteCreated>`: `kind` (`Device`), `invite: InviteKey`, `expires_ms` |
+| 6 | `DeviceBound` | `invite: EventId`, `proof` by the invite key |
+| 7 | `DeviceProfile` | `name`, `hardware` (requirements in one string, comma or space separated), `agents: {agent → max_sessions}`, `max_sessions` |
+| 8 | `ForkAnnounced` | `Signed<ForkAnnounced>`: `to: WorkforceId`, `members` |
+| 9 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires`, `review`, `state` |
+| 10 | `ItemEdited` | `item`, `changes`: `Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires` (set changes), `ReviewLevel`, `StepDone{step, done}`, `RecoveryLevel` |
+| 11 | `ItemMoved` | `item`, `to: ItemState`, `by_session: Option<SessionId>`, `because: Option<CommentId>` |
+| 12 | `ItemLinked` | `item`, `link`: `DependsOn(SetChange<ItemId>)` or `Supersedes(ItemId)` |
+| 13, 14 | `ItemArchived`, `ItemUnarchived` | `item` |
+| 15 | `Commented` | `item`, `text`, `kind` (`Plain`, `Blocker`, `ChangeRequest`, `CheckFailure`), `resolves: Vec<CommentId>`, `step: Option<StepId>`, `lines: Option<LineAnchor>`, the lines of the diff it is about (section 11), `head: Option<CommitId>`, where the branch of the work session that comments was (section 10) |
+| 16 | `SessionStarted` | `agent`, `item`, `role`: `Work`, `Review{commit: Option, step: Option<name>}`, `Supervise`, `Diagnose` |
+| 17 | `SessionEnded` | `session`, `reason` (section 9), `because: Option<CommentId>`, the comment that says why, `head: Option<CommitId>`, where the branch of the work session was when it ended (section 10) |
+| 18 | `Reviewed` | `item`, `commit: Option` (none: submitted without commits), `verdict` (`Approve`, `RequestChanges`, `Escalate`), `because: Option<CommentId>`, `round_limit_reached: Option<u32>`, for a `RequestChanges` at the round limit of its level (section 10) |
+| 19 | `Merged` | `item`, `reviewed`, `commit`, `onto: Option<CommitId>`, the tip of the target it moved from (section 10); none for a merge found landed in the target, which moved nothing |
+| 20 | `TargetMoved` | `commit`, `onto`: the principal pushed the target from `onto` to `commit` (section 10) |
+| 21 | `MergeClaimed` | `item`, `commit`: the device that writes it makes the merge of the approved `commit` (section 10) |
 
 * `Signed<T>` = `statement`, `signer: PrincipalKey`, `signature`.
 * `MemberSeed` = `principal`, `handle`, `devices`, `previous: Vec<PrincipalKey>` (keys the member
@@ -331,7 +323,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 * Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
-* Tags are never reused.
+* Within an event version tags are never reused, and a new body takes the next one.
 
 ### Store
 
@@ -357,6 +349,32 @@ state is refolded. Comment text stays in the log and loads on demand.
 verifies everything again; it creates or extends the store (daemon stopped), and does not cover keys
 or forks.
 
+**Signing again** (`wf import --resign <export.jsonl>`, daemon stopped) carries a log across a format
+break, while its principal key is on this device. It reads the `content` of an export by the older
+version, not its signed bytes, so no decoder of an older version is kept; the translation lives in one
+module, deleted once no log of the older version is left. It writes a new workforce:
+
+* One genesis (the name and founder of the old one, this device only, the policy the old log ran on
+  last, no `forked_from`), then every other event, in `(hlc, id)` order, as one feed of this device:
+  actor kept (the events of other devices are signed by this one in the same principal's name),
+  `hlc` kept (raised by the least step where two would tie), `seq` renumbered, `deps` mapped. Every id an event names (items, sessions,
+  comments, `resolves`, `because`, `observed`, target moves, merge claims) is the new id of the event
+  it named; `#refs` in titles, bodies and comments are rewritten, and so are the steps named by their
+  text. An old→new map is written beside the new store.
+* A fork's export carries the history of its parent: it is taken in as part of the one log, and the
+  fork point and `ForkAnnounced` are dropped. Dropped too: policy events (the genesis holds the
+  policy), invites, binds, and the profiles of other devices.
+* Older bodies are read as they were meant: old state names map to the fixed states (`backlog` →
+  draft, `in_progress` → active, `in_review`/`proposed` → review, `ratified`/`superseded` → done,
+  `dropped`/`rejected` → cancelled), and an item created without a state starts in its type's
+  initial state.
+* Before the new store is kept, the old and the new log fold to the same items under the id map
+  (title, body, state, step ticks, comments, links, review verdicts, merges, the target chain); the
+  import refuses otherwise. It refuses too a log with a session that has not ended, an actor of
+  another principal, or a policy that does not read in the current form. Local data keyed by ids (the work branches, agent repositories,
+  transcripts and session records) moves with the map; check logs, keyed by tree, carry over. The
+  old data directory is left as it was, as the backup.
+
 ### Admission and fold
 
 A rule is safe for peers to enforce only if its answer cannot depend on arrival order. So rules come
@@ -368,10 +386,8 @@ parent's and neither part at its maximum; the author is a bound device and the a
 principal (a `DeviceBound` as the author's first event, with its invite among its deps and a valid
 proof, binds it); an agent actor is a defined agent and its session belongs to that agent on that
 device; authority bodies carry a valid principal signature of the event's actor (an owner's for
-`BoundPolicySet`, `PolicySet` and `ForkAnnounced`, a member's for `InviteCreated`); a
-`BoundPolicySet` names the `hlc` of its own event; an unbound `PolicySet` (tag 2, written before the
-bound tag existed) is still admitted, so stored logs keep loading; the fold, not admission, keeps it from
-rolling a bound policy back (below); genesis is signed by its founder
+`PolicySet` and `ForkAnnounced`, a member's for `InviteCreated`); a `PolicySet` names the `hlc` of
+its own event; genesis is signed by its founder
 from a founder device, with unique principals, handles and devices; referenced items, sessions and
 agents exist; no item links to itself.
 
@@ -408,14 +424,6 @@ state its type no longer uses).
   in the log. Resolving is grow-only, so concurrent resolutions converge. `#refs` and `@mentions` are
   resolved at query time, since resolution depends on what is known.
 * Handles come from genesis seeds; a device bound twice resolves to its earliest `DeviceBound`.
-
-**Older events and policies** are read as they were written, since events are signed: an
-`ItemCreated` without a state starts in its type's initial state under the current policy; old state
-names map to the fixed states (`backlog` → draft, `in_progress` → active, `in_review`/`proposed` →
-review, `ratified`/`superseded` → done, `dropped`/`rejected` → cancelled; an unknown name reads as
-draft and is flagged); a `supersedes` that wrote `superseded` into its target's state leaves the target
-in that state; policies with `{name, category}` states, `transitions` and `"human"` steps are read,
-but `wf policy apply` and `edit` refuse them.
 
 ### Planned: `seen` and compaction (M6)
 
@@ -1710,10 +1718,9 @@ follows the same one. A copy in the repository has no effect. `wf policy show | 
 `edit` and `apply` need the principal key. The default is `crates/wf-core/src/default_policy.toml`,
 reproduced in `docs/guide/policy.md`.
 
-The policy is the latest readable `BoundPolicySet` by stamp (an unreadable one is flagged and the unbound policy runs). An unbound `PolicySet` (and the genesis policy) only
-counts until the first `BoundPolicySet` is folded and never again after it, whatever its parents or stamp,
-so an old owner-signed policy written into a new event cannot roll the policy back. This is a rule of the
-fold, so it does not depend on arrival order.
+The policy is the latest readable one by stamp, from the genesis or a `PolicySet`; one this version
+cannot read is flagged, and the one before it runs. A `PolicySet` names the `hlc` of its own event, so
+an old owner-signed policy written into a new event is refused and cannot roll the policy back.
 
 | Key | Holds |
 |---|---|
@@ -1827,7 +1834,9 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 4. Merging without the checks: `wf item merge --unchecked`, or edit the policy for a moment?
 5. Should the limit of two failed check runs be part of the recovery level?
 6. Batching several approved items into one checked merge, if checks get slow. Not before it hurts.
-7. A version byte per body instead of a new tag per layout change, before bodies change often.
+7. *Settled:* one tag per body, in its current layout; no version byte per body and no tags kept for
+   older layouts. A change of a layout is a new event version, and a log of an older version is signed
+   again with `wf import --resign` (section 6) while the log is small and has one principal.
 8. Prior art to read before M7: Radicle, p2panda, Keyhive, Matrix state resolution.
 9. Should the merge refuse to run checks outside the sandbox for work no principal reviewed (a `light`
    level, agents only)? Today it runs agent-written code with the principal's privileges after only

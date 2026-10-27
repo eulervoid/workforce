@@ -1,6 +1,5 @@
 //! The signed event envelope and the M0 event bodies.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroh_base::Signature;
@@ -20,9 +19,9 @@ use crate::name::{
     AgentName, HarnessName, Label, LaneName, NameError, RecoveryLevelName, Requirement,
     ReviewLevelName, TypeName,
 };
-use crate::session::{CommitId, EndReason, MachineFault, SessionRole, Verdict};
+use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 
-pub const EVENT_VERSION: u16 = 1;
+pub const EVENT_VERSION: u16 = 2;
 
 /// Longer events are refused at admission, so every event fits a sync frame with room to spare.
 pub const MAX_EVENT_LEN: usize = 1024 * 1024;
@@ -55,16 +54,9 @@ pub struct Genesis {
     pub forked_from: Option<ForkPoint>,
 }
 
-/// A policy as written before it was bound to its event (tag 2). Still decoded and folded, but
-/// no new one is authored: see [`BoundPolicySet`].
+/// Replaces the policy. Signed by an owner.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicySet {
-    /// Policy TOML, stored verbatim.
-    pub policy: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BoundPolicySet {
     /// Policy TOML, stored verbatim.
     pub policy: String,
     /// The `hlc` of the event that carries the policy. The signature covers only the workforce
@@ -154,40 +146,6 @@ pub struct ForkAnnounced {
     pub members: Vec<PrincipalKey>,
 }
 
-/// A state as an event names it. Events written before the states were fixed name them the way
-/// their type did, such as `in_progress` or `ratified`; the name is kept as written, so the event
-/// still encodes to the bytes that were signed.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct WrittenState(String);
-
-impl WrittenState {
-    /// A name as an older version wrote it, for tests that write such events.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn as_written(name: &str) -> Self {
-        WrittenState(name.to_string())
-    }
-
-    /// A name no version knew reads as `draft`, so nothing starts the item.
-    pub fn state(&self) -> ItemState {
-        ItemState::from_written(&self.0).unwrap_or(ItemState::Draft)
-    }
-
-    /// The name, when it is not one this version reads.
-    pub fn unknown(&self) -> Option<&str> {
-        match ItemState::from_written(&self.0) {
-            Some(_) => None,
-            None => Some(&self.0),
-        }
-    }
-}
-
-impl From<ItemState> for WrittenState {
-    fn from(state: ItemState) -> Self {
-        WrittenState(state.name().to_string())
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemCreated {
     pub item_type: TypeName,
@@ -199,70 +157,7 @@ pub struct ItemCreated {
     pub requires: Vec<Requirement>,
     /// The review level the item needs; `None` for none.
     pub review: Option<ReviewLevelName>,
-    /// `None` only in events written before items were created in a state: those start in the
-    /// initial state of their type.
-    pub state: Option<WrittenState>,
-}
-
-/// The wire form of `ItemCreated` before it carried a state.
-///
-/// Borrows what it encodes, so that an event encoded for its id copies none of its text.
-#[derive(Serialize, Deserialize)]
-struct ItemCreatedWithoutState<'a> {
-    item_type: Cow<'a, TypeName>,
-    title: Cow<'a, str>,
-    body: Cow<'a, str>,
-    priority: Option<Priority>,
-    lane: Option<Cow<'a, LaneName>>,
-    labels: Cow<'a, [Label]>,
-    requires: Cow<'a, [Requirement]>,
-    review: Option<Cow<'a, ReviewLevelName>>,
-}
-
-impl ItemCreated {
-    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
-        if self.state.is_some() {
-            return Ok((tag::ITEM_CREATED, encoding::encode(self)?));
-        }
-        let without_state = ItemCreatedWithoutState {
-            item_type: Cow::Borrowed(&self.item_type),
-            title: Cow::Borrowed(&self.title),
-            body: Cow::Borrowed(&self.body),
-            priority: self.priority,
-            lane: self.lane.as_ref().map(Cow::Borrowed),
-            labels: Cow::Borrowed(&self.labels),
-            requires: Cow::Borrowed(&self.requires),
-            review: self.review.as_ref().map(Cow::Borrowed),
-        };
-        Ok((
-            tag::ITEM_CREATED_WITHOUT_STATE,
-            encoding::encode(&without_state)?,
-        ))
-    }
-
-    /// One without a state would encode to other bytes than were signed.
-    fn with_state(payload: &[u8]) -> Result<Self, EncodingError> {
-        let created: ItemCreated = encoding::decode(payload)?;
-        match created.state {
-            Some(_) => Ok(created),
-            None => Err(EncodingError::malformed()),
-        }
-    }
-
-    fn without_state(payload: &[u8]) -> Result<Self, EncodingError> {
-        let old: ItemCreatedWithoutState = encoding::decode(payload)?;
-        Ok(ItemCreated {
-            item_type: old.item_type.into_owned(),
-            title: old.title.into_owned(),
-            body: old.body.into_owned(),
-            priority: old.priority,
-            lane: old.lane.map(Cow::into_owned),
-            labels: old.labels.into_owned(),
-            requires: old.requires.into_owned(),
-            review: old.review.map(Cow::into_owned),
-            state: None,
-        })
-    }
+    pub state: ItemState,
 }
 
 /// One edit to an item field.
@@ -294,7 +189,7 @@ pub struct ItemEdited {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemMoved {
     pub item: ItemId,
-    pub to: WrittenState,
+    pub to: ItemState,
     /// The session whose start or end this move carries out, when the daemon makes it for one.
     pub by_session: Option<SessionId>,
     /// The comment on the item that says why, written just before.
@@ -337,29 +232,6 @@ pub struct Commented {
     pub head: Option<CommitId>,
 }
 
-/// The wire form of `Commented` before it could be about lines of a diff, and still for one that
-/// is not. Borrows what it encodes.
-#[derive(Serialize, Deserialize)]
-struct CommentWithoutLines<'a> {
-    item: ItemId,
-    text: Cow<'a, str>,
-    kind: CommentKind,
-    resolves: Cow<'a, [CommentId]>,
-    step: Option<StepId>,
-}
-
-/// The wire form of `Commented` before it could name a head, and still for one that does not.
-/// Borrows what it encodes.
-#[derive(Serialize, Deserialize)]
-struct CommentWithoutHead<'a> {
-    item: ItemId,
-    text: Cow<'a, str>,
-    kind: CommentKind,
-    resolves: Cow<'a, [CommentId]>,
-    step: Option<StepId>,
-    lines: Option<LineAnchor>,
-}
-
 impl Commented {
     pub fn plain(item: ItemId, text: impl Into<String>) -> Self {
         Self {
@@ -387,102 +259,6 @@ impl Commented {
                 format!("{}:\n{quote}\n{}", lines.heading(), self.text)
             }
         }
-    }
-
-    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
-        if self.head.is_some() {
-            return Ok((tag::COMMENT_WITH_HEAD, encoding::encode(self)?));
-        }
-        if self.kind == CommentKind::CheckFailure {
-            return Ok((
-                tag::COMMENT_CHECK_FAILURE,
-                encoding::encode(&self.without_head())?,
-            ));
-        }
-        match self.lines {
-            Some(_) => Ok((
-                tag::COMMENT_ON_LINES,
-                encoding::encode(&self.without_head())?,
-            )),
-            None => Ok((
-                tag::COMMENT,
-                encoding::encode(&CommentWithoutLines {
-                    item: self.item,
-                    text: Cow::Borrowed(&self.text),
-                    kind: self.kind,
-                    resolves: Cow::Borrowed(&self.resolves),
-                    step: self.step,
-                })?,
-            )),
-        }
-    }
-
-    fn without_head(&self) -> CommentWithoutHead<'_> {
-        CommentWithoutHead {
-            item: self.item,
-            text: Cow::Borrowed(&self.text),
-            kind: self.kind,
-            resolves: Cow::Borrowed(&self.resolves),
-            step: self.step,
-            lines: self.lines.clone(),
-        }
-    }
-
-    fn from_without_head(old: CommentWithoutHead<'_>) -> Self {
-        Commented {
-            item: old.item,
-            text: old.text.into_owned(),
-            kind: old.kind,
-            resolves: old.resolves.into_owned(),
-            step: old.step,
-            lines: old.lines,
-            head: None,
-        }
-    }
-
-    /// One without a head would encode to other bytes than were signed.
-    fn with_head(payload: &[u8]) -> Result<Self, EncodingError> {
-        let comment: Commented = encoding::decode(payload)?;
-        match comment.head {
-            Some(_) => Ok(comment),
-            None => Err(EncodingError::malformed()),
-        }
-    }
-
-    /// One without lines would encode to other bytes than were signed.
-    fn on_lines(payload: &[u8]) -> Result<Self, EncodingError> {
-        let comment = Self::from_without_head(encoding::decode(payload)?);
-        match (comment.kind, &comment.lines) {
-            (CommentKind::CheckFailure, _) | (_, None) => Err(EncodingError::malformed()),
-            (_, Some(_)) => Ok(comment),
-        }
-    }
-
-    /// A check failure under any other tag would encode to other bytes than were signed.
-    fn check_failure(payload: &[u8]) -> Result<Self, EncodingError> {
-        let comment = Self::from_without_head(encoding::decode(payload)?);
-        match comment.kind {
-            CommentKind::CheckFailure => Ok(comment),
-            CommentKind::Plain | CommentKind::Blocker | CommentKind::ChangeRequest => {
-                Err(EncodingError::malformed())
-            }
-        }
-    }
-
-    fn without_lines(payload: &[u8]) -> Result<Self, EncodingError> {
-        let old: CommentWithoutLines = encoding::decode(payload)?;
-        if old.kind == CommentKind::CheckFailure {
-            return Err(EncodingError::malformed());
-        }
-        Ok(Commented {
-            item: old.item,
-            text: old.text.into_owned(),
-            kind: old.kind,
-            resolves: old.resolves.into_owned(),
-            step: old.step,
-            lines: None,
-            head: None,
-        })
     }
 }
 
@@ -582,75 +358,6 @@ pub struct SessionStarted {
     pub role: SessionRole,
 }
 
-/// The wire form of `SessionRole` before a review took the step of a name.
-#[derive(Serialize, Deserialize)]
-enum SessionRoleWithoutStep {
-    Work,
-    Review { commit: Option<CommitId> },
-    Supervise,
-    Diagnose,
-}
-
-/// The wire form of `SessionStarted` before a review took the step of a name.
-#[derive(Serialize, Deserialize)]
-struct SessionStartedWithoutStep {
-    agent: AgentName,
-    item: ItemId,
-    role: SessionRoleWithoutStep,
-}
-
-impl SessionStarted {
-    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
-        let role = match &self.role {
-            SessionRole::Review { step: Some(_), .. } => {
-                return Ok((tag::SESSION_STARTED_FOR_STEP, encoding::encode(self)?));
-            }
-            SessionRole::Work => SessionRoleWithoutStep::Work,
-            SessionRole::Review { commit, step: None } => {
-                SessionRoleWithoutStep::Review { commit: *commit }
-            }
-            SessionRole::Supervise => SessionRoleWithoutStep::Supervise,
-            SessionRole::Diagnose => SessionRoleWithoutStep::Diagnose,
-        };
-        Ok((
-            tag::SESSION_STARTED,
-            encoding::encode(&SessionStartedWithoutStep {
-                agent: self.agent.clone(),
-                item: self.item,
-                role,
-            })?,
-        ))
-    }
-
-    /// One that is not a review for a step would encode to other bytes than were signed.
-    fn for_step(payload: &[u8]) -> Result<Self, EncodingError> {
-        let started: SessionStarted = encoding::decode(payload)?;
-        match started.role {
-            SessionRole::Review { step: Some(_), .. } => Ok(started),
-            SessionRole::Work
-            | SessionRole::Review { step: None, .. }
-            | SessionRole::Supervise
-            | SessionRole::Diagnose => Err(EncodingError::malformed()),
-        }
-    }
-
-    fn without_step(payload: &[u8]) -> Result<Self, EncodingError> {
-        let old: SessionStartedWithoutStep = encoding::decode(payload)?;
-        Ok(SessionStarted {
-            agent: old.agent,
-            item: old.item,
-            role: match old.role {
-                SessionRoleWithoutStep::Work => SessionRole::Work,
-                SessionRoleWithoutStep::Review { commit } => {
-                    SessionRole::Review { commit, step: None }
-                }
-                SessionRoleWithoutStep::Supervise => SessionRole::Supervise,
-                SessionRoleWithoutStep::Diagnose => SessionRole::Diagnose,
-            },
-        })
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionEnded {
     pub session: SessionId,
@@ -661,165 +368,6 @@ pub struct SessionEnded {
     /// submission hands in. `None` when the branch has no commits of its own. Set by the daemon
     /// after it imported the commit.
     pub head: Option<CommitId>,
-}
-
-/// The wire form of `SessionEnded` before it could name a head, with the comment that says why.
-#[derive(Serialize, Deserialize)]
-struct SessionEndedWithoutHead {
-    session: SessionId,
-    reason: WrittenEndReason,
-    because: Option<CommentId>,
-}
-
-/// The wire form of `SessionEnded` before it named the comment that says why.
-#[derive(Serialize, Deserialize)]
-struct SessionEndedWithoutComment {
-    session: SessionId,
-    reason: WrittenEndReason,
-}
-
-/// `EndReason` as tags 21 and 25 write it, in the order its variants had then: a submission
-/// carries its commit, which is the end's `head`. Every submission is still written this way, so
-/// the ends written before `head` existed keep their bytes; tag 31 names a head for other ends.
-#[derive(Clone, Copy, Serialize, Deserialize)]
-enum WrittenEndReason {
-    Submitted { commit: Option<CommitId> },
-    Reviewed,
-    Supervised,
-    Released,
-    TimedOut,
-    Failed,
-    Cancelled,
-    Interrupted,
-    Diagnosed,
-    MachineFault(MachineFault),
-}
-
-impl WrittenEndReason {
-    /// The older form of `reason` with `head`; `None` when only tag 31 or 32 can carry them: for
-    /// a head of an end other than a submission, or a reason newer than these tags.
-    fn of(reason: EndReason, head: Option<CommitId>) -> Option<Self> {
-        let written = match reason {
-            EndReason::Submitted => return Some(WrittenEndReason::Submitted { commit: head }),
-            EndReason::Reviewed => WrittenEndReason::Reviewed,
-            EndReason::Supervised => WrittenEndReason::Supervised,
-            EndReason::Released => WrittenEndReason::Released,
-            EndReason::TimedOut => WrittenEndReason::TimedOut,
-            EndReason::Failed => WrittenEndReason::Failed,
-            EndReason::Cancelled => WrittenEndReason::Cancelled,
-            EndReason::Interrupted => WrittenEndReason::Interrupted,
-            EndReason::Diagnosed => WrittenEndReason::Diagnosed,
-            EndReason::MachineFault(fault) => WrittenEndReason::MachineFault(fault),
-            EndReason::LeaseExpired | EndReason::Outclaimed => return None,
-        };
-        head.is_none().then_some(written)
-    }
-
-    /// The reason, and the head a submission names.
-    fn read(self) -> (EndReason, Option<CommitId>) {
-        let reason = match self {
-            WrittenEndReason::Submitted { commit } => return (EndReason::Submitted, commit),
-            WrittenEndReason::Reviewed => EndReason::Reviewed,
-            WrittenEndReason::Supervised => EndReason::Supervised,
-            WrittenEndReason::Released => EndReason::Released,
-            WrittenEndReason::TimedOut => EndReason::TimedOut,
-            WrittenEndReason::Failed => EndReason::Failed,
-            WrittenEndReason::Cancelled => EndReason::Cancelled,
-            WrittenEndReason::Interrupted => EndReason::Interrupted,
-            WrittenEndReason::Diagnosed => EndReason::Diagnosed,
-            WrittenEndReason::MachineFault(fault) => EndReason::MachineFault(fault),
-        };
-        (reason, None)
-    }
-}
-
-impl SessionEnded {
-    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
-        if self.lost_claim() {
-            return Ok((tag::SESSION_ENDED_CLAIM_LOST, encoding::encode(self)?));
-        }
-        let Some(reason) = WrittenEndReason::of(self.reason, self.head) else {
-            return Ok((tag::SESSION_ENDED_WITH_HEAD, encoding::encode(self)?));
-        };
-        match self.because {
-            Some(_) => Ok((
-                tag::SESSION_ENDED,
-                encoding::encode(&SessionEndedWithoutHead {
-                    session: self.session,
-                    reason,
-                    because: self.because,
-                })?,
-            )),
-            None => Ok((
-                tag::SESSION_ENDED_WITHOUT_COMMENT,
-                encoding::encode(&SessionEndedWithoutComment {
-                    session: self.session,
-                    reason,
-                })?,
-            )),
-        }
-    }
-
-    /// One without a head, or a submission, would encode to other bytes than were signed.
-    fn with_head(payload: &[u8]) -> Result<Self, EncodingError> {
-        let ended: SessionEnded = encoding::decode(payload)?;
-        match WrittenEndReason::of(ended.reason, ended.head) {
-            None if !ended.lost_claim() => Ok(ended),
-            None | Some(_) => Err(EncodingError::malformed()),
-        }
-    }
-
-    /// One that did not lose its claim would encode under an older tag.
-    fn claim_lost(payload: &[u8]) -> Result<Self, EncodingError> {
-        let ended: SessionEnded = encoding::decode(payload)?;
-        match ended.lost_claim() {
-            true => Ok(ended),
-            false => Err(EncodingError::malformed()),
-        }
-    }
-
-    /// Whether the session ended because it lost its claim, which only tag 32 writes.
-    fn lost_claim(&self) -> bool {
-        match self.reason {
-            EndReason::LeaseExpired | EndReason::Outclaimed => true,
-            EndReason::Submitted
-            | EndReason::Reviewed
-            | EndReason::Supervised
-            | EndReason::Released
-            | EndReason::TimedOut
-            | EndReason::Failed
-            | EndReason::Cancelled
-            | EndReason::Interrupted
-            | EndReason::Diagnosed
-            | EndReason::MachineFault(_) => false,
-        }
-    }
-
-    /// One without a comment would encode to other bytes than were signed.
-    fn with_comment(payload: &[u8]) -> Result<Self, EncodingError> {
-        let old: SessionEndedWithoutHead = encoding::decode(payload)?;
-        let (reason, head) = old.reason.read();
-        match old.because {
-            Some(_) => Ok(SessionEnded {
-                session: old.session,
-                reason,
-                because: old.because,
-                head,
-            }),
-            None => Err(EncodingError::malformed()),
-        }
-    }
-
-    fn without_comment(payload: &[u8]) -> Result<Self, EncodingError> {
-        let old: SessionEndedWithoutComment = encoding::decode(payload)?;
-        let (reason, head) = old.reason.read();
-        Ok(SessionEnded {
-            session: old.session,
-            reason,
-            because: None,
-            head,
-        })
-    }
 }
 
 /// The verdict of a review session or of a principal on the work submitted for an item.
@@ -837,52 +385,6 @@ pub struct Reviewed {
     pub round_limit_reached: Option<u32>,
 }
 
-/// The wire form of `Reviewed` before a review level could limit its rounds.
-#[derive(Serialize, Deserialize)]
-struct ReviewedWithoutRoundLimit {
-    item: ItemId,
-    commit: Option<CommitId>,
-    verdict: Verdict,
-    because: Option<CommentId>,
-}
-
-impl Reviewed {
-    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
-        if self.round_limit_reached.is_some() {
-            return Ok((tag::REVIEW_AT_ROUND_LIMIT, encoding::encode(self)?));
-        }
-        Ok((
-            tag::REVIEW,
-            encoding::encode(&ReviewedWithoutRoundLimit {
-                item: self.item,
-                commit: self.commit,
-                verdict: self.verdict,
-                because: self.because,
-            })?,
-        ))
-    }
-
-    fn without_round_limit(payload: &[u8]) -> Result<Self, EncodingError> {
-        let old: ReviewedWithoutRoundLimit = encoding::decode(payload)?;
-        Ok(Reviewed {
-            item: old.item,
-            commit: old.commit,
-            verdict: old.verdict,
-            because: old.because,
-            round_limit_reached: None,
-        })
-    }
-
-    /// One that reached no round limit would encode to other bytes than were signed.
-    fn at_round_limit(payload: &[u8]) -> Result<Self, EncodingError> {
-        let reviewed: Reviewed = encoding::decode(payload)?;
-        match reviewed.round_limit_reached {
-            Some(_) => Ok(reviewed),
-            None => Err(EncodingError::malformed()),
-        }
-    }
-}
-
 /// The reviewed commit of an item went into the target branch as `commit`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Merged {
@@ -890,53 +392,9 @@ pub struct Merged {
     pub reviewed: CommitId,
     pub commit: CommitId,
     /// The tip of the target the merge moved it from: a link of the target's chain. `None` for a
-    /// merge that did not move the target, as one found landed already, and in events written
+    /// merge that did not move the target, as one found landed already, and in merges from
     /// before the target was a chain.
     pub onto: Option<CommitId>,
-}
-
-/// The wire form of `Merged` before it named the tip it moved the target from, and still for one
-/// that names none. Borrows nothing: every field is a copy.
-#[derive(Serialize, Deserialize)]
-struct MergedWithoutOnto {
-    item: ItemId,
-    reviewed: CommitId,
-    commit: CommitId,
-}
-
-impl Merged {
-    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
-        match self.onto {
-            Some(_) => Ok((tag::MERGED_ONTO, encoding::encode(self)?)),
-            None => Ok((
-                tag::MERGED,
-                encoding::encode(&MergedWithoutOnto {
-                    item: self.item,
-                    reviewed: self.reviewed,
-                    commit: self.commit,
-                })?,
-            )),
-        }
-    }
-
-    /// One without `onto` would encode to other bytes than were signed.
-    fn with_onto(payload: &[u8]) -> Result<Self, EncodingError> {
-        let merged: Merged = encoding::decode(payload)?;
-        match merged.onto {
-            Some(_) => Ok(merged),
-            None => Err(EncodingError::malformed()),
-        }
-    }
-
-    fn without_onto(payload: &[u8]) -> Result<Self, EncodingError> {
-        let old: MergedWithoutOnto = encoding::decode(payload)?;
-        Ok(Merged {
-            item: old.item,
-            reviewed: old.reviewed,
-            commit: old.commit,
-            onto: None,
-        })
-    }
 }
 
 /// The target branch moved from `onto` to `commit` by other than a merge: a push of the principal
@@ -959,7 +417,6 @@ pub struct MergeClaimed {
 pub enum EventBody {
     Genesis(Signed<Genesis>),
     PolicySet(Signed<PolicySet>),
-    BoundPolicySet(Signed<BoundPolicySet>),
     AgentDefined(AgentDefined),
     AgentRemoved(AgentRemoved),
     InviteCreated(Signed<InviteCreated>),
@@ -986,61 +443,30 @@ pub enum EventBody {
     },
 }
 
+/// One tag per body, in the order of [`EventBody`]. A body whose layout changes before v1 is a
+/// format break (SPEC §17.7): a new event version, and `wf import --resign` from an export.
 mod tag {
     pub const GENESIS: u16 = 1;
     pub const POLICY_SET: u16 = 2;
     pub const AGENT_DEFINED: u16 = 3;
-    pub const INVITE_CREATED: u16 = 4;
-    pub const DEVICE_BOUND: u16 = 5;
-    pub const DEVICE_PROFILE: u16 = 6;
-    pub const FORK_ANNOUNCED: u16 = 7;
-    pub const AGENT_REMOVED: u16 = 8;
-    /// `ItemCreated` as written before it carried a state.
-    pub const ITEM_CREATED_WITHOUT_STATE: u16 = 10;
-    pub const ITEM_EDITED: u16 = 11;
-    pub const ITEM_MOVED: u16 = 12;
-    pub const ITEM_LINKED: u16 = 13;
-    pub const ITEM_ARCHIVED: u16 = 14;
-    pub const ITEM_UNARCHIVED: u16 = 15;
-    /// `Commented` as written before it could be about lines, and still for one that is not.
-    pub const COMMENT: u16 = 16;
-    pub const ITEM_CREATED: u16 = 17;
-    /// `SessionStarted` as written before a review took the step of a name, and still for any
-    /// start but that of a review for a step.
-    pub const SESSION_STARTED: u16 = 20;
-    /// `SessionEnded` as written before it named the comment that says why, and still for an end
-    /// without one.
-    pub const SESSION_ENDED_WITHOUT_COMMENT: u16 = 21;
-    /// `Reviewed` as written before a review level could limit its rounds, and still for a verdict
-    /// that reached no limit.
-    pub const REVIEW: u16 = 22;
-    pub const MERGED: u16 = 23;
-    // 24 was `Report`, now a comment with a step. Retired: never reuse it.
-    pub const SESSION_ENDED: u16 = 25;
-    /// `Commented` about lines of a diff; one that is not is still written as `COMMENT`.
-    pub const COMMENT_ON_LINES: u16 = 26;
-    /// `Commented` of kind `CheckFailure`. Peers that predate it carry it as `Unknown` instead of
-    /// failing to decode the event; they do not show it as a change request.
-    pub const COMMENT_CHECK_FAILURE: u16 = 27;
-    /// `PolicySet` as written once it carried the hlc of its event; tag 2 is the unbound one.
-    pub const BOUND_POLICY_SET: u16 = 28;
-    /// `SessionStarted` of a review for the step of a name.
-    pub const SESSION_STARTED_FOR_STEP: u16 = 29;
-    /// `Commented` that names a head; one that does not is still written under its older tag.
-    pub const COMMENT_WITH_HEAD: u16 = 30;
-    /// `SessionEnded` that names a head; one that does not is still written under its older tag.
-    pub const SESSION_ENDED_WITH_HEAD: u16 = 31;
-    /// `SessionEnded` because the session lost its claim (`LeaseExpired`, `Outclaimed`), with or
-    /// without a head. Peers that predate these reasons carry it as `Unknown` instead of failing
-    /// to decode the event.
-    pub const SESSION_ENDED_CLAIM_LOST: u16 = 32;
-    /// `Reviewed` of a request for changes that reached the round limit of its review level.
-    pub const REVIEW_AT_ROUND_LIMIT: u16 = 33;
-    /// `Merged` that names the tip it moved the target from; one that names none is still
-    /// written as `MERGED`.
-    pub const MERGED_ONTO: u16 = 34;
-    pub const TARGET_MOVED: u16 = 35;
-    pub const MERGE_CLAIMED: u16 = 36;
+    pub const AGENT_REMOVED: u16 = 4;
+    pub const INVITE_CREATED: u16 = 5;
+    pub const DEVICE_BOUND: u16 = 6;
+    pub const DEVICE_PROFILE: u16 = 7;
+    pub const FORK_ANNOUNCED: u16 = 8;
+    pub const ITEM_CREATED: u16 = 9;
+    pub const ITEM_EDITED: u16 = 10;
+    pub const ITEM_MOVED: u16 = 11;
+    pub const ITEM_LINKED: u16 = 12;
+    pub const ITEM_ARCHIVED: u16 = 13;
+    pub const ITEM_UNARCHIVED: u16 = 14;
+    pub const COMMENTED: u16 = 15;
+    pub const SESSION_STARTED: u16 = 16;
+    pub const SESSION_ENDED: u16 = 17;
+    pub const REVIEWED: u16 = 18;
+    pub const MERGED: u16 = 19;
+    pub const TARGET_MOVED: u16 = 20;
+    pub const MERGE_CLAIMED: u16 = 21;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -1056,7 +482,6 @@ impl EventBody {
         match self {
             EventBody::Genesis(_) => "Genesis",
             EventBody::PolicySet(_) => "PolicySet",
-            EventBody::BoundPolicySet(_) => "BoundPolicySet",
             EventBody::AgentDefined(_) => "AgentDefined",
             EventBody::AgentRemoved(_) => "AgentRemoved",
             EventBody::InviteCreated(_) => "InviteCreated",
@@ -1089,7 +514,6 @@ impl EventBody {
         match self {
             EventBody::Genesis(body) => body.serialize(serializer),
             EventBody::PolicySet(body) => body.serialize(serializer),
-            EventBody::BoundPolicySet(body) => body.serialize(serializer),
             EventBody::AgentDefined(body) => body.serialize(serializer),
             EventBody::AgentRemoved(body) => body.serialize(serializer),
             EventBody::InviteCreated(body) => body.serialize(serializer),
@@ -1117,24 +541,23 @@ impl EventBody {
         let (tag, payload) = match self {
             EventBody::Genesis(body) => (tag::GENESIS, encoding::encode(body)?),
             EventBody::PolicySet(body) => (tag::POLICY_SET, encoding::encode(body)?),
-            EventBody::BoundPolicySet(body) => (tag::BOUND_POLICY_SET, encoding::encode(body)?),
             EventBody::AgentDefined(body) => (tag::AGENT_DEFINED, encoding::encode(body)?),
             EventBody::AgentRemoved(body) => (tag::AGENT_REMOVED, encoding::encode(body)?),
             EventBody::InviteCreated(body) => (tag::INVITE_CREATED, encoding::encode(body)?),
             EventBody::DeviceBound(body) => (tag::DEVICE_BOUND, encoding::encode(body)?),
             EventBody::DeviceProfile(body) => (tag::DEVICE_PROFILE, encoding::encode(body)?),
             EventBody::ForkAnnounced(body) => (tag::FORK_ANNOUNCED, encoding::encode(body)?),
-            EventBody::ItemCreated(body) => body.to_tagged()?,
+            EventBody::ItemCreated(body) => (tag::ITEM_CREATED, encoding::encode(body)?),
             EventBody::ItemEdited(body) => (tag::ITEM_EDITED, encoding::encode(body)?),
             EventBody::ItemMoved(body) => (tag::ITEM_MOVED, encoding::encode(body)?),
             EventBody::ItemLinked(body) => (tag::ITEM_LINKED, encoding::encode(body)?),
             EventBody::ItemArchived(body) => (tag::ITEM_ARCHIVED, encoding::encode(body)?),
             EventBody::ItemUnarchived(body) => (tag::ITEM_UNARCHIVED, encoding::encode(body)?),
-            EventBody::Commented(body) => body.to_tagged()?,
-            EventBody::SessionStarted(body) => body.to_tagged()?,
-            EventBody::SessionEnded(body) => body.to_tagged()?,
-            EventBody::Reviewed(body) => body.to_tagged()?,
-            EventBody::Merged(body) => body.to_tagged()?,
+            EventBody::Commented(body) => (tag::COMMENTED, encoding::encode(body)?),
+            EventBody::SessionStarted(body) => (tag::SESSION_STARTED, encoding::encode(body)?),
+            EventBody::SessionEnded(body) => (tag::SESSION_ENDED, encoding::encode(body)?),
+            EventBody::Reviewed(body) => (tag::REVIEWED, encoding::encode(body)?),
+            EventBody::Merged(body) => (tag::MERGED, encoding::encode(body)?),
             EventBody::TargetMoved(body) => (tag::TARGET_MOVED, encoding::encode(body)?),
             EventBody::MergeClaimed(body) => (tag::MERGE_CLAIMED, encoding::encode(body)?),
             EventBody::Unknown { tag, payload } => (*tag, payload.clone()),
@@ -1147,46 +570,23 @@ impl EventBody {
         Ok(match tagged.tag {
             tag::GENESIS => EventBody::Genesis(encoding::decode(payload)?),
             tag::POLICY_SET => EventBody::PolicySet(encoding::decode(payload)?),
-            tag::BOUND_POLICY_SET => EventBody::BoundPolicySet(encoding::decode(payload)?),
             tag::AGENT_DEFINED => EventBody::AgentDefined(encoding::decode(payload)?),
             tag::AGENT_REMOVED => EventBody::AgentRemoved(encoding::decode(payload)?),
             tag::INVITE_CREATED => EventBody::InviteCreated(encoding::decode(payload)?),
             tag::DEVICE_BOUND => EventBody::DeviceBound(encoding::decode(payload)?),
             tag::DEVICE_PROFILE => EventBody::DeviceProfile(encoding::decode(payload)?),
             tag::FORK_ANNOUNCED => EventBody::ForkAnnounced(encoding::decode(payload)?),
-            tag::ITEM_CREATED_WITHOUT_STATE => {
-                EventBody::ItemCreated(ItemCreated::without_state(payload)?)
-            }
-            tag::ITEM_CREATED => EventBody::ItemCreated(ItemCreated::with_state(payload)?),
+            tag::ITEM_CREATED => EventBody::ItemCreated(encoding::decode(payload)?),
             tag::ITEM_EDITED => EventBody::ItemEdited(encoding::decode(payload)?),
             tag::ITEM_MOVED => EventBody::ItemMoved(encoding::decode(payload)?),
             tag::ITEM_LINKED => EventBody::ItemLinked(encoding::decode(payload)?),
             tag::ITEM_ARCHIVED => EventBody::ItemArchived(encoding::decode(payload)?),
             tag::ITEM_UNARCHIVED => EventBody::ItemUnarchived(encoding::decode(payload)?),
-            tag::COMMENT => EventBody::Commented(Commented::without_lines(payload)?),
-            tag::COMMENT_ON_LINES => EventBody::Commented(Commented::on_lines(payload)?),
-            tag::COMMENT_CHECK_FAILURE => EventBody::Commented(Commented::check_failure(payload)?),
-            tag::COMMENT_WITH_HEAD => EventBody::Commented(Commented::with_head(payload)?),
-            tag::SESSION_STARTED => {
-                EventBody::SessionStarted(SessionStarted::without_step(payload)?)
-            }
-            tag::SESSION_STARTED_FOR_STEP => {
-                EventBody::SessionStarted(SessionStarted::for_step(payload)?)
-            }
-            tag::SESSION_ENDED_WITHOUT_COMMENT => {
-                EventBody::SessionEnded(SessionEnded::without_comment(payload)?)
-            }
-            tag::SESSION_ENDED => EventBody::SessionEnded(SessionEnded::with_comment(payload)?),
-            tag::SESSION_ENDED_WITH_HEAD => {
-                EventBody::SessionEnded(SessionEnded::with_head(payload)?)
-            }
-            tag::SESSION_ENDED_CLAIM_LOST => {
-                EventBody::SessionEnded(SessionEnded::claim_lost(payload)?)
-            }
-            tag::REVIEW => EventBody::Reviewed(Reviewed::without_round_limit(payload)?),
-            tag::REVIEW_AT_ROUND_LIMIT => EventBody::Reviewed(Reviewed::at_round_limit(payload)?),
-            tag::MERGED => EventBody::Merged(Merged::without_onto(payload)?),
-            tag::MERGED_ONTO => EventBody::Merged(Merged::with_onto(payload)?),
+            tag::COMMENTED => EventBody::Commented(encoding::decode(payload)?),
+            tag::SESSION_STARTED => EventBody::SessionStarted(encoding::decode(payload)?),
+            tag::SESSION_ENDED => EventBody::SessionEnded(encoding::decode(payload)?),
+            tag::REVIEWED => EventBody::Reviewed(encoding::decode(payload)?),
+            tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
             tag::TARGET_MOVED => EventBody::TargetMoved(encoding::decode(payload)?),
             tag::MERGE_CLAIMED => EventBody::MergeClaimed(encoding::decode(payload)?),
             tag => EventBody::Unknown {
@@ -1241,8 +641,15 @@ impl Event {
         encoding::encode(self)
     }
 
+    /// Refuses an event of another version before its body, whose tags only mean something in
+    /// its own version.
     pub fn decode(bytes: &[u8]) -> Result<Self, EncodingError> {
-        encoding::decode(bytes)
+        let version: u16 = encoding::decode_leading(bytes)?;
+        match version.cmp(&EVENT_VERSION) {
+            std::cmp::Ordering::Less => Err(EncodingError::OlderEvent(version)),
+            std::cmp::Ordering::Greater => Err(EncodingError::NewerEvent(version)),
+            std::cmp::Ordering::Equal => encoding::decode(bytes),
+        }
     }
 
     /// Signs arbitrary content. Normal code goes through [`EventBuilder`], which fills the
@@ -1383,142 +790,9 @@ mod tests {
         );
     }
 
-    fn golden_body_bytes(body: &EventBody) -> String {
-        data_encoding::HEXLOWER.encode(&encoding::encode(body).unwrap())
-    }
-
     #[test]
-    fn golden_comment_body() {
-        let body = EventBody::Commented(Commented {
-            item: ItemId::from_bytes([1; 32]),
-            text: "why".into(),
-            kind: CommentKind::ChangeRequest,
-            resolves: vec![CommentId::from_bytes([3; 32])],
-            step: Some(StepId::of("pick storage")),
-            lines: None,
-            head: None,
-        });
-        assert_eq!(golden_body_bytes(&body), GOLDEN_COMMENT_BODY);
-    }
-
-    const GOLDEN_COMMENT_BODY: &str = "105120010101010101010101010101010101010101010101010101010101010101010103776879020120030303030303030303030303030303030303030303030303030303030303030301b67b3441c138056f";
-
-    #[test]
-    fn golden_session_bodies() {
-        let item = ItemId::from_bytes([1; 32]);
-        let session = SessionId::from_bytes([2; 32]);
-        let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
-        let bodies = [
-            EventBody::SessionStarted(SessionStarted {
-                agent: AgentName::new("coder").unwrap(),
-                item,
-                role: SessionRole::Review {
-                    commit: Some(commit),
-                    step: None,
-                },
-            }),
-            EventBody::SessionEnded(SessionEnded {
-                session,
-                reason: EndReason::Submitted,
-                because: None,
-                head: Some(commit),
-            }),
-            EventBody::Reviewed(Reviewed {
-                item,
-                commit: Some(commit),
-                verdict: Verdict::RequestChanges,
-                because: Some(CommentId::from(EventId::of(b"tests"))),
-                round_limit_reached: None,
-            }),
-            EventBody::Merged(Merged {
-                item,
-                reviewed: commit,
-                commit,
-                onto: None,
-            }),
-            EventBody::SessionEnded(SessionEnded {
-                session,
-                reason: EndReason::LeaseExpired,
-                because: None,
-                head: Some(commit),
-            }),
-            EventBody::SessionEnded(SessionEnded {
-                session,
-                reason: EndReason::Outclaimed,
-                because: Some(CommentId::from(EventId::of(b"tests"))),
-                head: None,
-            }),
-        ];
-        let encoded: Vec<String> = bodies.iter().map(golden_body_bytes).collect();
-        assert_eq!(encoded, GOLDEN_SESSION_BODIES);
-    }
-
-    const GOLDEN_SESSION_BODIES: [&str; 6] = [
-        "143f05636f6465722001010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233",
-        "15392002020202020202020202020202020202020202020202020202020202020202020001001400112233445566778899aabbccddeeff00112233",
-        "165b20010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff0011223301012065e27c6eb2ae7ce97aceb1a372b6fb11fbc5bbffd95ee6fa17949cd148c6f730",
-        "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
-        "203a2002020202020202020202020202020202020202020202020202020202020202020a0001001400112233445566778899aabbccddeeff00112233",
-        "20452002020202020202020202020202020202020202020202020202020202020202020b012065e27c6eb2ae7ce97aceb1a372b6fb11fbc5bbffd95ee6fa17949cd148c6f73000",
-    ];
-
-    fn created_task(state: Option<WrittenState>) -> EventBody {
-        EventBody::ItemCreated(ItemCreated {
-            item_type: TypeName::new("task").unwrap(),
-            title: "t".into(),
-            body: String::new(),
-            priority: Some(Priority::P2),
-            lane: None,
-            labels: vec![],
-            requires: vec![],
-            review: None,
-            state,
-        })
-    }
-
-    /// Bodies written before the states were fixed keep their bytes, so their ids and signatures
-    /// hold.
-    #[test]
-    fn golden_bodies_from_before_the_fixed_states() {
-        let created = created_task(None);
-        let moved = EventBody::ItemMoved(ItemMoved {
-            item: ItemId::from_bytes([1; 32]),
-            to: WrittenState::as_written("in_progress"),
-            by_session: None,
-            because: None,
-        });
-        for (body, golden) in [created, moved].iter().zip(GOLDEN_OLD_ITEM_BODIES) {
-            assert_eq!(golden_body_bytes(body), golden);
-            let decoded: EventBody =
-                encoding::decode(&data_encoding::HEXLOWER.decode(golden.as_bytes()).unwrap())
-                    .unwrap();
-            assert_eq!(&decoded, body);
-        }
-    }
-
-    const GOLDEN_OLD_ITEM_BODIES: [&str; 2] = [
-        "0a0e047461736b017400010200000000",
-        "0c2f2001010101010101010101010101010101010101010101010101010101010101010b696e5f70726f67726573730000",
-    ];
-
-    #[test]
-    fn an_item_created_in_a_state_round_trips_under_its_own_tag() {
-        let created = created_task(Some(ItemState::Draft.into()));
-        let bytes = encoding::encode(&created).unwrap();
-        assert_eq!(bytes[0], tag::ITEM_CREATED as u8);
-        assert_eq!(encoding::decode::<EventBody>(&bytes).unwrap(), created);
-        let EventBody::ItemCreated(without) = created_task(None) else {
-            unreachable!()
-        };
-        let forged = TaggedBody {
-            tag: tag::ITEM_CREATED,
-            payload: encoding::encode(&without).unwrap(),
-        };
-        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
-    }
-
-    fn comment_on_lines() -> Commented {
-        Commented {
+    fn a_comment_on_lines_reads_with_where_they_are_and_the_lines_above_it() {
+        let comment = Commented {
             kind: CommentKind::ChangeRequest,
             lines: Some(LineAnchor {
                 commit: CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap()),
@@ -1529,253 +803,34 @@ mod tests {
                 quote: "+fn parse_lazily() {}\n fn main() {}".into(),
             }),
             ..Commented::plain(ItemId::from_bytes([1; 32]), "Keep the old name.")
-        }
-    }
-
-    #[test]
-    fn a_comment_on_lines_round_trips_under_its_own_tag() {
-        let comment = comment_on_lines();
-        let bytes = encoding::encode(&EventBody::Commented(comment.clone())).unwrap();
-        assert_eq!(bytes[0], tag::COMMENT_ON_LINES as u8);
+        };
         assert_eq!(
-            encoding::decode::<EventBody>(&bytes).unwrap(),
-            EventBody::Commented(comment.clone())
-        );
-        let forged = TaggedBody {
-            tag: tag::COMMENT_ON_LINES,
-            payload: encoding::encode(&Commented {
-                lines: None,
-                ..comment
-            })
-            .unwrap(),
-        };
-        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
-    }
-
-    #[test]
-    fn a_check_failure_round_trips_under_its_own_tag_that_older_peers_carry_unknown() {
-        let failure = Commented {
-            kind: CommentKind::CheckFailure,
-            ..Commented::plain(ItemId::from_bytes([1; 32]), "cargo test failed")
-        };
-        let body = EventBody::Commented(failure.clone());
-        let bytes = encoding::encode(&body).unwrap();
-        assert_eq!(bytes[0], tag::COMMENT_CHECK_FAILURE as u8);
-        assert_eq!(encoding::decode::<EventBody>(&bytes).unwrap(), body);
-        // What a peer that predates the tag does with it: carry it and write it back unchanged.
-        let tagged: TaggedBody = encoding::decode(&bytes).unwrap();
-        let carried = EventBody::Unknown {
-            tag: tagged.tag,
-            payload: tagged.payload,
-        };
-        assert_eq!(encoding::encode(&carried).unwrap(), bytes);
-        // The kind belongs to the tag: under the others it would re-encode to other bytes.
-        for other in [tag::COMMENT, tag::COMMENT_ON_LINES] {
-            let forged = TaggedBody {
-                tag: other,
-                payload: encoding::encode(&failure).unwrap(),
-            };
-            assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
-        }
-        let forged = TaggedBody {
-            tag: tag::COMMENT_CHECK_FAILURE,
-            payload: encoding::encode(&Commented::plain(failure.item, "x")).unwrap(),
-        };
-        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
-    }
-
-    #[test]
-    fn a_comment_on_lines_reads_with_where_they_are_and_the_lines_above_it() {
-        assert_eq!(
-            comment_on_lines().text_with_lines(),
+            comment.text_with_lines(),
             "src/lib.rs:12-13 at 00112233:\n    +fn parse_lazily() {}\n     fn main() {}\n\nKeep the old name."
         );
     }
 
     #[test]
-    fn a_head_is_written_under_a_tag_of_its_own_and_only_under_it() {
-        let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
-        let comment = Commented {
-            head: Some(commit),
-            ..comment_on_lines()
-        };
-        let ended = SessionEnded {
-            session: SessionId::from_bytes([2; 32]),
-            reason: EndReason::Released,
-            because: Some(CommentId::from_bytes([3; 32])),
-            head: Some(commit),
-        };
-        for (body, expected) in [
-            (
-                EventBody::Commented(comment.clone()),
-                tag::COMMENT_WITH_HEAD,
-            ),
-            (
-                EventBody::SessionEnded(ended.clone()),
-                tag::SESSION_ENDED_WITH_HEAD,
-            ),
-        ] {
-            let bytes = encoding::encode(&body).unwrap();
-            assert_eq!(bytes[0], expected as u8);
-            assert_eq!(encoding::decode::<EventBody>(&bytes).unwrap(), body);
+    fn an_event_of_another_version_is_refused_before_its_body() {
+        let (_, device) = signers();
+        let mut content = genesis_event().content;
+        for (version, names_the_import) in [(1, true), (EVENT_VERSION + 1, false)] {
+            content.v = version;
+            let bytes = Event::sign_content(content.clone(), &device)
+                .unwrap()
+                .encode()
+                .unwrap();
+            let error = Event::decode(&bytes).unwrap_err();
+            assert_eq!(
+                error.to_string().contains("wf import --resign"),
+                names_the_import,
+                "{error}"
+            );
         }
-        // Without a head, the older tags decode to a body without one, and a body under the tag of
-        // a head without one would encode to other bytes than were signed.
-        for (payload, forged) in [
-            (
-                encoding::encode(&Commented {
-                    head: None,
-                    ..comment
-                })
-                .unwrap(),
-                tag::COMMENT_WITH_HEAD,
-            ),
-            (
-                encoding::encode(&SessionEnded {
-                    head: None,
-                    ..ended
-                })
-                .unwrap(),
-                tag::SESSION_ENDED_WITH_HEAD,
-            ),
-        ] {
-            let forged = TaggedBody {
-                tag: forged,
-                payload,
-            };
-            assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
-        }
-    }
-
-    #[test]
-    fn a_lost_claim_is_written_under_a_tag_of_its_own_and_only_under_it() {
-        let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
-        let session = SessionId::from_bytes([2; 32]);
-        for reason in [EndReason::LeaseExpired, EndReason::Outclaimed] {
-            for head in [None, Some(commit)] {
-                let ended = SessionEnded {
-                    session,
-                    reason,
-                    because: None,
-                    head,
-                };
-                let body = EventBody::SessionEnded(ended.clone());
-                let bytes = encoding::encode(&body).unwrap();
-                assert_eq!(bytes[0], tag::SESSION_ENDED_CLAIM_LOST as u8);
-                assert_eq!(encoding::decode::<EventBody>(&bytes).unwrap(), body);
-                // Under the tag of a head it would encode to other bytes than were signed.
-                let forged = TaggedBody {
-                    tag: tag::SESSION_ENDED_WITH_HEAD,
-                    payload: encoding::encode(&ended).unwrap(),
-                };
-                let forged = encoding::encode(&forged).unwrap();
-                assert!(encoding::decode::<EventBody>(&forged).is_err());
-            }
-        }
-        // Nor does tag 32 carry any other end.
-        let forged = TaggedBody {
-            tag: tag::SESSION_ENDED_CLAIM_LOST,
-            payload: encoding::encode(&SessionEnded {
-                session,
-                reason: EndReason::Released,
-                because: None,
-                head: Some(commit),
-            })
-            .unwrap(),
-        };
-        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
-    }
-
-    #[test]
-    fn a_submission_keeps_the_wire_form_it_had_before_heads() {
-        let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
-        let session = SessionId::from_bytes([2; 32]);
-        let because = CommentId::from_bytes([3; 32]);
-        // As a build before heads wrote them, with the commit in the reason.
-        let written = [
-            (
-                tag::SESSION_ENDED,
-                encoding::encode(&SessionEndedWithoutHead {
-                    session,
-                    reason: WrittenEndReason::Submitted {
-                        commit: Some(commit),
-                    },
-                    because: Some(because),
-                })
-                .unwrap(),
-                SessionEnded {
-                    session,
-                    reason: EndReason::Submitted,
-                    because: Some(because),
-                    head: Some(commit),
-                },
-            ),
-            (
-                tag::SESSION_ENDED_WITHOUT_COMMENT,
-                encoding::encode(&SessionEndedWithoutComment {
-                    session,
-                    reason: WrittenEndReason::Submitted { commit: None },
-                })
-                .unwrap(),
-                SessionEnded {
-                    session,
-                    reason: EndReason::Submitted,
-                    because: None,
-                    head: None,
-                },
-            ),
-        ];
-        for (tag, payload, ended) in written {
-            let bytes = encoding::encode(&TaggedBody {
-                tag,
-                payload: payload.clone(),
-            })
-            .unwrap();
-            let decoded = encoding::decode::<EventBody>(&bytes).unwrap();
-            assert_eq!(decoded, EventBody::SessionEnded(ended.clone()));
-            assert_eq!(encoding::encode(&decoded).unwrap(), bytes);
-        }
-        // A submission under the tag of a head would encode to other bytes than were signed.
-        let forged = TaggedBody {
-            tag: tag::SESSION_ENDED_WITH_HEAD,
-            payload: encoding::encode(&SessionEnded {
-                session,
-                reason: EndReason::Submitted,
-                because: Some(because),
-                head: Some(commit),
-            })
-            .unwrap(),
-        };
-        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
-    }
-
-    #[test]
-    fn a_session_end_with_a_comment_round_trips_under_its_own_tag() {
-        let ended = SessionEnded {
-            session: SessionId::from_bytes([2; 32]),
-            reason: EndReason::Released,
-            because: Some(CommentId::from_bytes([3; 32])),
-            head: None,
-        };
-        let bytes = encoding::encode(&EventBody::SessionEnded(ended.clone())).unwrap();
-        assert_eq!(bytes[0], tag::SESSION_ENDED as u8);
-        assert_eq!(
-            encoding::decode::<EventBody>(&bytes).unwrap(),
-            EventBody::SessionEnded(ended.clone())
-        );
-        let forged = TaggedBody {
-            tag: tag::SESSION_ENDED,
-            payload: encoding::encode(&SessionEnded {
-                because: None,
-                ..ended
-            })
-            .unwrap(),
-        };
-        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
     }
 
     const GOLDEN_LEN: usize = 343;
-    const GOLDEN_ID: &str = "x47qrvvox2dqfkr2nzucimqflq2usnxuo3o65b5uagx7xge7ipxa";
+    const GOLDEN_ID: &str = "bf5uamsdesx7ridz3onx674my2in6unhwqjvxlbfbzipcssa34pa";
 
     #[test]
     fn round_trips_and_verifies() {
@@ -1833,7 +888,7 @@ mod tests {
     #[test]
     fn known_tag_with_corrupt_payload_is_rejected() {
         let tagged = TaggedBody {
-            tag: tag::COMMENT,
+            tag: tag::COMMENTED,
             payload: vec![1, 2, 3],
         };
         let bytes = encoding::encode(&tagged).unwrap();

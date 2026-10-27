@@ -190,11 +190,8 @@ impl State {
     /// no review session holds. Each item is offered once, with its first such step. These are the
     /// items whose branch the daemon checks against the target before anyone spends a review on it.
     pub fn offered_reviews(&self) -> Vec<(ItemId, CommitId, ReviewStep)> {
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return Vec::new();
-        };
         self.live_items()
-            .filter(|item| item.state(policy) == ItemState::Review)
+            .filter(|item| item.state() == ItemState::Review)
             .filter_map(|item| {
                 let (Some(commit), _) = self.submission(item.id())? else {
                     return None;
@@ -291,7 +288,7 @@ impl State {
             return Vec::new();
         };
         self.live_items()
-            .filter(|item| item.state(policy) == ItemState::Review)
+            .filter(|item| item.state() == ItemState::Review)
             // Such as a check that fails on the target too: it waits until that is resolved.
             .filter(|item| !item.has_open_blocker())
             .filter_map(|item| {
@@ -325,11 +322,8 @@ impl State {
     /// merge, see [`State::pending_merges`]. An item that moved on after the submission was moved
     /// by someone, and is left where it is. Only items of types that use `done`.
     pub fn finished_reviews(&self) -> Vec<ItemId> {
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return Vec::new();
-        };
         self.live_items()
-            .filter(|item| item.state(policy) == ItemState::Review)
+            .filter(|item| item.state() == ItemState::Review)
             .filter(|item| {
                 matches!(
                     self.submission(item.id()),
@@ -349,9 +343,6 @@ impl State {
     /// Items that wait for a review step by an agent that no hosted agent the dispatcher starts has
     /// the capabilities for, with the names of those steps; steps without a name are not listed.
     pub fn unstaffed_reviews(&self) -> Vec<(ItemId, Vec<ReviewStepName>)> {
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return Vec::new();
-        };
         // What each agent that starts by itself offers on each device that hosts it.
         let staff: Vec<BTreeSet<Requirement>> = self
             .agents()
@@ -368,7 +359,7 @@ impl State {
             })
             .collect();
         self.live_items()
-            .filter(|item| item.state(policy) == ItemState::Review)
+            .filter(|item| item.state() == ItemState::Review)
             .filter_map(|item| {
                 let Some(ReviewStatus::Awaiting { steps, .. }) = self.review_status(item.id())
                 else {
@@ -405,13 +396,10 @@ impl State {
             return Vec::new();
         };
         let offered = self.offered(device, definition);
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return Vec::new();
-        };
         let mut found: Vec<(&Item, Option<CommitId>, Option<ReviewStepName>)> = Vec::new();
         for item in self
             .live_items()
-            .filter(|item| item.state(policy) == ItemState::Review)
+            .filter(|item| item.state() == ItemState::Review)
         {
             let Some((commit, submitted)) = self.submission(item.id()) else {
                 continue;

@@ -52,7 +52,7 @@ pub use git_service::{FetchError, run_git_bridge};
 pub use open_files::raise_open_file_limit;
 pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, peers_of, sync_all};
-pub use runner::{SessionError, session_model};
+pub use runner::{SessionError, copy_session_record, session_model};
 pub use storage::{StorageClosed, StorageHandle};
 
 /// The file in the directory of a workforce that said where its repository was on this machine,

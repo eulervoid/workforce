@@ -416,14 +416,13 @@ impl Snapshot {
 }
 
 fn counts(state: &State, graph: &DependencyGraph) -> Counts {
-    let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut counts = Counts {
         live_sessions: state.live_sessions().count(),
         devices: state.devices().count(),
         ..Counts::default()
     };
     for item in state.live_items() {
-        if item.state(policy) == ItemState::Open {
+        if item.state() == ItemState::Open {
             counts.open_items += 1;
         }
         if state.readiness(graph, item) == Some(Readiness::Blocked) {
@@ -434,7 +433,7 @@ fn counts(state: &State, graph: &DependencyGraph) -> Counts {
 }
 
 fn item_ref(state: &State, id: ItemId) -> Option<ItemRefView> {
-    state.item(id).map(|item| view::item_ref_view(state, item))
+    state.item(id).map(view::item_ref_view)
 }
 
 /// `coder` for an agent, `@ada` for a principal.
@@ -729,7 +728,7 @@ pub fn moves_back<'a>(
             continue;
         };
         let (Actor::Daemon(_), ItemState::Open, Some(because)) =
-            (&event.content.actor, moved.to.state(), moved.because)
+            (&event.content.actor, moved.to, moved.because)
         else {
             continue;
         };
@@ -742,7 +741,7 @@ pub fn moves_back<'a>(
             if let EventBody::ItemMoved(earlier) = &earlier.content.body
                 && earlier.item == moved.item
             {
-                Some(earlier.to.state())
+                Some(earlier.to)
             } else {
                 None
             }

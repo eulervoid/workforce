@@ -472,7 +472,7 @@ fn agents_and_policy() {
     std::fs::write(&file, old).unwrap();
     assert!(
         wf.fail(&["policy", "apply", file.to_str().unwrap()])
-            .contains("names its states the old way")
+            .contains("`new` is not a state")
     );
 }
 

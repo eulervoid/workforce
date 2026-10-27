@@ -477,7 +477,6 @@ impl State {
             EventBody::DeviceBound(_) => self.check_binding(event)?,
             EventBody::Genesis(_)
             | EventBody::PolicySet(_)
-            | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
             | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)
@@ -640,12 +639,6 @@ impl State {
         match &event.content.body {
             EventBody::Genesis(_) => Err(Invalid::DuplicateGenesis),
             EventBody::PolicySet(signed) => {
-                self.check_signed_by_actor(signed, event, trust, Role::Owner)?;
-                // Not bound to its event, so it could be an old policy written into a new
-                // event; the fold lets any bound policy beat it.
-                Ok(())
-            }
-            EventBody::BoundPolicySet(signed) => {
                 self.check_signed_by_actor(signed, event, trust, Role::Owner)?;
                 if signed.statement.hlc != event.content.hlc {
                     return Err(Invalid::PolicyNotForThisEvent);
@@ -886,7 +879,6 @@ impl State {
                 }
                 EventBody::Genesis(_)
                 | EventBody::PolicySet(_)
-                | EventBody::BoundPolicySet(_)
                 | EventBody::AgentDefined(_)
                 | EventBody::AgentRemoved(_)
                 | EventBody::InviteCreated(_)
@@ -935,7 +927,6 @@ impl State {
         match body {
             EventBody::Genesis(_)
             | EventBody::PolicySet(_)
-            | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
             | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)
@@ -988,7 +979,7 @@ impl State {
                 }
             }
             EventBody::ItemMoved(moved) => {
-                if moved.to.state() == ItemState::Done && moved.item == folded.item() {
+                if moved.to == ItemState::Done && moved.item == folded.item() {
                     Err(PolicyViolation::SessionFinishesItsItem)
                 } else {
                     Ok(())
@@ -1045,7 +1036,7 @@ impl State {
         if supervises || !worked_on {
             return false;
         }
-        let policy = &workforce.running_policy().policy;
+        let policy = &workforce.policy.value().policy;
         // `None` ranks below every level, so removing the review lowers it.
         let rank = |level: Option<&ReviewLevelName>| {
             level.and_then(|name| policy.review_rank(name).map(|rank| rank + 1))
@@ -1072,7 +1063,7 @@ impl State {
         let Some(workforce) = &self.workforce else {
             return Ok(());
         };
-        let policy = &workforce.running_policy().policy;
+        let policy = &workforce.policy.value().policy;
         let known_lane = |lane: &LaneName| {
             if policy.lanes.contains_key(lane) {
                 Ok(())
@@ -1134,10 +1125,7 @@ impl State {
         };
 
         match body {
-            EventBody::Genesis(_)
-            | EventBody::PolicySet(_)
-            | EventBody::BoundPolicySet(_)
-            | EventBody::Unknown { .. } => Ok(()),
+            EventBody::Genesis(_) | EventBody::PolicySet(_) | EventBody::Unknown { .. } => Ok(()),
             EventBody::Commented(comment) => {
                 if comment.text.trim().is_empty() && comment.resolves.is_empty() {
                     return Err(PolicyViolation::EmptyComment);
@@ -1227,16 +1215,15 @@ impl State {
                 if created.title.trim().is_empty() {
                     return Err(PolicyViolation::EmptyTitle);
                 }
-                if let Some(state) = created.state.as_ref().map(|written| written.state()) {
-                    let draft = config.uses(ItemState::Draft);
-                    if state != config.initial && !(draft && state == ItemState::Draft) {
-                        return Err(PolicyViolation::CreatedInState {
-                            type_name: type_name.clone(),
-                            state,
-                            initial: config.initial,
-                            or_draft: if draft { " or as a `draft`" } else { "" },
-                        });
-                    }
+                let state = created.state;
+                let draft = config.uses(ItemState::Draft);
+                if state != config.initial && !(draft && state == ItemState::Draft) {
+                    return Err(PolicyViolation::CreatedInState {
+                        type_name: type_name.clone(),
+                        state,
+                        initial: config.initial,
+                        or_draft: if draft { " or as a `draft`" } else { "" },
+                    });
                 }
                 match created.priority {
                     Some(_) => require_field(type_name, Field::Priority)?,
@@ -1304,7 +1291,7 @@ impl State {
                 let item = item_of(&moved.item)?;
                 because_on(item, moved.because)?;
                 let config = type_of(item.item_type())?;
-                let state = moved.to.state();
+                let state = moved.to;
                 if config.uses(state) {
                     Ok(())
                 } else {
@@ -1360,7 +1347,7 @@ impl State {
                 if item.archived_at().is_some() {
                     return Err(PolicyViolation::AlreadyArchived(reference.item));
                 }
-                let state = item.state(policy);
+                let state = item.state();
                 if state.is_terminal() {
                     Ok(())
                 } else {

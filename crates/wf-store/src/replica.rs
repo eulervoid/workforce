@@ -18,7 +18,7 @@ pub const SNAPSHOT_INTERVAL: usize = 256;
 
 /// Bumped whenever the serialized shape of [`State`] changes. Snapshots are a cache: a mismatch
 /// discards the snapshot and refolds from the log.
-const SNAPSHOT_FORMAT: u32 = 18;
+const SNAPSHOT_FORMAT: u32 = 19;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiveError {
@@ -301,7 +301,7 @@ impl<S: EventStore> Replica<S> {
             builder = builder.depending_on(bound.invite);
         }
         // The signer chose the hlc of a policy before the event existed.
-        if let EventBody::BoundPolicySet(signed) = &body {
+        if let EventBody::PolicySet(signed) = &body {
             let hlc = signed.statement.hlc;
             if hlc.wall_ms() > now_ms.saturating_add(HLC_TOLERANCE_MS) {
                 return Err(AuthorError::PolicyHlcInFuture);
@@ -452,8 +452,8 @@ mod tests {
     }
 
     const GOLDEN_SNAPSHOT: (u32, usize, &str) = (
-        18,
-        24495,
-        "i5rbw3r5fy2odkk7stxxk7qnu6psc7gql7lkiftypec3aas22lta",
+        19,
+        20907,
+        "zqoldf5lolqzf7cdaclbw7iq3umpinnxkixfd4p6e2vuj2idxnjq",
     );
 }

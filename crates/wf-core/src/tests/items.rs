@@ -15,8 +15,7 @@ fn item_id(event: &crate::event::Event) -> ItemId {
 }
 
 fn state_of(state: &State, item: ItemId) -> ItemState {
-    let policy = &state.policy().unwrap().policy;
-    state.item(item).unwrap().state(policy)
+    state.item(item).unwrap().state()
 }
 
 fn ready_ids(state: &State) -> Vec<ItemId> {
@@ -59,66 +58,6 @@ fn items_are_created_in_the_initial_state_of_their_type_or_as_drafts() {
         state.check_policy(&create_in("decision", "b", ItemState::Draft)),
         Err(PolicyViolation::CreatedInState { .. })
     ));
-}
-
-/// A log as versions before the fixed states wrote it: items created without a state, and moves
-/// to the states of the built-in types by their old names.
-#[test]
-fn a_log_with_the_old_state_names_folds_to_the_same_items() {
-    let fixture = Fixture::new(1);
-    let mut state = fixture.state();
-    let mut clock = 2_000;
-    let mut apply = |state: &mut State, body| {
-        clock += 1;
-        item_id(&fixture.apply(state, 0, clock, body))
-    };
-    let expectations = [
-        ("task", None, ItemState::Open),
-        ("task", Some("backlog"), ItemState::Draft),
-        ("task", Some("in_progress"), ItemState::Active),
-        ("task", Some("in_review"), ItemState::Review),
-        ("task", Some("done"), ItemState::Done),
-        ("task", Some("dropped"), ItemState::Cancelled),
-        ("decision", None, ItemState::Review),
-        ("decision", Some("proposed"), ItemState::Review),
-        ("decision", Some("ratified"), ItemState::Done),
-        ("decision", Some("rejected"), ItemState::Cancelled),
-        ("decision", Some("superseded"), ItemState::Done),
-        ("distill", Some("in_progress"), ItemState::Active),
-    ];
-    let mut items = Vec::new();
-    for (item_type, moved_to, expected) in expectations {
-        let item = apply(&mut state, create_without_state(item_type, "old"));
-        if let Some(name) = moved_to {
-            apply(&mut state, moved_as_written(item, name));
-        }
-        items.push((item, expected));
-    }
-    for (item, expected) in &items {
-        assert_eq!(state_of(&state, *item), *expected);
-    }
-    let ready: Vec<ItemId> = vec![items[0].0];
-    assert_eq!(ready_ids(&state), ready);
-
-    // The old default policy, as it is in the log, reads as the current one.
-    let old_policy = include_str!("old_default_policy.toml");
-    let old = fixture.policy_set(&state, 0, 2_900, &fixture.founder, old_policy);
-    fixture.apply(&mut state, 0, 2_900, old);
-    let current = crate::policy::Policy::default_policy();
-    for (name, config) in &state.policy().unwrap().policy.types {
-        let mut states = current.types[name].states.clone();
-        // `distill` gained `cancelled`.
-        if name.as_str() == "distill" {
-            states.remove(&ItemState::Cancelled);
-        }
-        assert_eq!(
-            (config.initial, &config.states),
-            (current.types[name].initial, &states)
-        );
-    }
-    for (item, expected) in &items {
-        assert_eq!(state_of(&state, *item), *expected);
-    }
 }
 
 #[test]
@@ -262,25 +201,6 @@ fn supersedes_is_for_decisions_only() {
         state.check_policy(&supersedes(task, decision)),
         Err(PolicyViolation::SupersedesRequiresDecisions)
     );
-}
-
-#[test]
-fn unknown_state_names_read_as_draft_and_are_flagged() {
-    let fixture = Fixture::new(1);
-    let mut state = fixture.state();
-    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "crash")));
-    fixture.apply(&mut state, 0, 2_001, moved_as_written(task, "triaged"));
-    assert_eq!(state_of(&state, task), ItemState::Draft);
-    let ItemEntry::Live(item) = state.item(task).unwrap() else {
-        panic!()
-    };
-    assert_eq!(item.unknown_state(), Some("triaged"));
-    assert!(!ready_ids(&state).contains(&task));
-    fixture.apply(&mut state, 0, 2_002, moved(task, ItemState::Open));
-    let ItemEntry::Live(item) = state.item(task).unwrap() else {
-        panic!()
-    };
-    assert_eq!(item.unknown_state(), None);
 }
 
 #[test]

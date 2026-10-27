@@ -44,6 +44,26 @@ pub fn session_model(transcripts: &Path, session: SessionId) -> Option<String> {
     AgentSessionRecord::read(&record_path(transcripts, session))?.model
 }
 
+/// Copies the record of `old` in `from` as the record of `new` in `to`, for `wf import --resign`:
+/// the comments it told are named by `comment`, and those it does not name are left out. `false`
+/// when there is no readable record of `old`.
+pub fn copy_session_record(
+    from: &Path,
+    old: SessionId,
+    to: &Path,
+    new: SessionId,
+    comment: impl Fn(CommentId) -> Option<CommentId>,
+) -> std::io::Result<bool> {
+    let Some(mut record) = AgentSessionRecord::read(&record_path(from, old)) else {
+        return Ok(false);
+    };
+    record.told = record
+        .told
+        .map(|told| told.into_iter().filter_map(&comment).collect());
+    record.write(&record_path(to, new))?;
+    Ok(true)
+}
+
 impl AgentSessionRecord {
     pub(crate) fn read(path: &Path) -> Option<Self> {
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()

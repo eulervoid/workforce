@@ -6,18 +6,18 @@ expression: "Envelope::new(&views)"
   "schema": 9,
   "data": [
     {
-      "id": "xhhe555r32fgmztlic2yczosy3i7gp3tvb5lfi7ouyn3lspic62a",
+      "id": "o6e5ttgqlajz4lgudb67tmxcucjb2zn36mlqa2ovtabs6l4gqw2q",
       "seq": 6,
       "device": "43a72e7144",
       "actor": "@ada",
       "at": "1970-01-01T00:00:07Z",
       "kind": "SessionEnded",
-      "item": "iuvz7damji2bepk6zs7jwstwfh53jv4yplx4ratzieath72crnsq",
+      "item": "rzq4ahyuygzloz63xxspqhty5rktmtc6fqbc73773rhbu7flbiyq",
       "title": "Implement feed sync",
-      "summary": "session rs75k7 ended: released",
+      "summary": "session l6glq2 ended: released",
       "outcome": {
         "session_ended": {
-          "session": "rs75k7j5lhy5x677hie2efk4zpuzrlgtc4gef4cafnnwgblqmybq",
+          "session": "l6glq2ig3zfvi2b2z6tlv3kpofgkwnuh2gl46et2b4r76qqepceq",
           "reason": "released",
           "commit": null,
           "because": "the relay is down"
@@ -26,15 +26,15 @@ expression: "Envelope::new(&views)"
       "verified": true
     },
     {
-      "id": "ruerwczpe7vjhwgeugpavetvl2e4shugl77si4aq3iivjo2ncd3a",
+      "id": "unmhxgruhx56lee5g2vjiqwjcdlmesm4s3cr6jpcrf3sywmzrzga",
       "seq": 8,
       "device": "43a72e7144",
       "actor": "@ada",
       "at": "1970-01-01T00:00:09Z",
       "kind": "Reviewed",
-      "item": "iuvz7damji2bepk6zs7jwstwfh53jv4yplx4ratzieath72crnsq",
+      "item": "rzq4ahyuygzloz63xxspqhty5rktmtc6fqbc73773rhbu7flbiyq",
       "title": "Implement feed sync",
-      "summary": "#iuvz7d reviewed: changes requested",
+      "summary": "#rzq4ah reviewed: changes requested",
       "outcome": {
         "reviewed": {
           "commit": "00112233445566778899aabbccddeeff00112233",

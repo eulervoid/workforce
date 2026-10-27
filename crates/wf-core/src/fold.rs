@@ -14,7 +14,7 @@ use crate::session::CommitId;
 use crate::session::{Ended, Session, Verdict};
 use crate::state::{
     AgentDefinition, Announcement, Binding, Feed, FeedHead, ForkState, Invite, Known, Member,
-    Neighbours, Origin, PolicyBinding, PolicyDoc, State, Workforce,
+    Neighbours, Origin, PolicyDoc, State, Workforce,
 };
 use crate::target::{self, MoveCause, TargetMove};
 
@@ -91,8 +91,6 @@ impl State {
                 devices,
                 policy_source: Lww::new(genesis.policy.clone(), stamp),
                 policy: Lww::new(policy, stamp),
-                bound_policy_source: None,
-                bound_policy: None,
                 agents: BTreeMap::new(),
                 items: BTreeMap::new(),
                 sessions: BTreeMap::new(),
@@ -182,7 +180,6 @@ impl State {
                 content.body,
                 EventBody::Genesis(_)
                     | EventBody::PolicySet(_)
-                    | EventBody::BoundPolicySet(_)
                     | EventBody::InviteCreated(_)
                     | EventBody::DeviceBound(_)
                     | EventBody::ForkAnnounced(_)
@@ -264,14 +261,7 @@ impl State {
                 }
             }
             EventBody::PolicySet(signed) => {
-                workforce.set_policy(
-                    signed.statement.policy.clone(),
-                    stamp,
-                    PolicyBinding::Unbound,
-                );
-            }
-            EventBody::BoundPolicySet(signed) => {
-                workforce.set_policy(signed.statement.policy.clone(), stamp, PolicyBinding::Bound);
+                workforce.set_policy(signed.statement.policy.clone(), stamp);
             }
             EventBody::AgentDefined(_) | EventBody::AgentRemoved(_)
                 if origin == Origin::History
@@ -366,7 +356,7 @@ impl State {
                     if review.verdict == Verdict::RequestChanges
                         && review.round_limit_reached.is_none()
                     {
-                        item.state.set(Some(ItemState::Open.into()), stamp);
+                        item.state.set(ItemState::Open, stamp);
                     }
                     item.verdicts.insert(
                         id,
@@ -432,7 +422,7 @@ impl State {
             EventBody::ItemMoved(moved) => {
                 if let Some(item) = workforce.items.get_mut(&moved.item) {
                     item.touch(stamp, &content.actor);
-                    item.state.set(Some(moved.to.clone()), stamp);
+                    item.state.set(moved.to, stamp);
                 }
             }
             EventBody::ItemLinked(ItemLinked { item, link }) => match link {

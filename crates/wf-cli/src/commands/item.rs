@@ -196,7 +196,7 @@ pub(super) fn item(
                 labels: draft.labels.into_iter().collect(),
                 requires: draft.requires.into_iter().collect(),
                 review: draft.review,
-                state: Some(state.into()),
+                state,
             }))?;
             let id = ItemId::from(event.id());
             // The recovery level is no field of a new item, so that events keep their layout.
@@ -361,18 +361,17 @@ fn move_items(
     let mut unchanged = Vec::new();
     {
         let state = workspace.state();
-        let policy = &state.policy().expect("a workforce has a policy").policy;
         for id in &ids {
             let ItemEntry::Live(live) = state.item(*id).expect("resolved ids exist") else {
                 bail!("#{} is archived; unarchive it first", id.short());
             };
-            if live.state(policy) == to && live.unknown_state().is_none() {
+            if live.state() == to {
                 unchanged.push(*id);
                 continue;
             }
             let probe = EventBody::ItemMoved(ItemMoved {
                 item: *id,
-                to: to.into(),
+                to,
                 by_session: None,
                 because: None,
             });
@@ -387,7 +386,7 @@ fn move_items(
         let because = comment_why(workspace, *id, args.note.clone())?;
         let event = workspace.author(EventBody::ItemMoved(ItemMoved {
             item: *id,
-            to: to.into(),
+            to,
             by_session: None,
             because,
         }))?;
@@ -437,10 +436,9 @@ fn archive_finished(
 ) -> anyhow::Result<()> {
     let ids: Vec<ItemId> = {
         let state = workspace.state();
-        let policy = &state.policy().expect("a workforce has a policy").policy;
         sorted_views(state, Scope::Live, ItemOrder::Priority)
             .into_iter()
-            .filter(|view| states.contains(&view.state(policy)))
+            .filter(|view| states.contains(&view.state()))
             .map(|view| view.id())
             .collect()
     };

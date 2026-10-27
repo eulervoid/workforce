@@ -217,7 +217,7 @@ impl Daemon {
             return Err(SessionError::Archived(item));
         };
         let policy = &state.policy().ok_or(SessionError::NoPolicy)?.policy;
-        let plan = MergePlan::of(live, policy, commit);
+        let plan = MergePlan::of(live, commit);
         if plan == MergePlan::Nothing {
             return Ok(());
         }

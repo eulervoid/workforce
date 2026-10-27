@@ -3,21 +3,30 @@
 //! The encoding is postcard: deterministic as long as no hash maps are serialized. Keep
 //! all encoding in this module so format changes are deliberate and caught by golden tests.
 //!
-//! Stored events are never rewritten, so every body must decode from the bytes any earlier
-//! version wrote. `event/golden_bodies.txt` holds one event per body tag as it was first written.
-//! It is only ever appended to: a new tag adds a line, an old line never changes. A body whose
-//! layout changes takes a new tag and keeps decoding the old one.
+//! Stored events are never rewritten, so every body must decode from the bytes earlier versions
+//! of the same event version wrote. `event/golden_bodies.txt` holds one event per body tag. Until
+//! v1, a layout change is a new event version, and an older log is signed again with
+//! `wf import --resign` (SPEC §17.7).
 
 use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(Debug, thiserror::Error)]
-#[error("canonical encoding failed")]
-pub struct EncodingError(#[from] postcard::Error);
+pub enum EncodingError {
+    #[error("canonical encoding failed")]
+    Postcard(#[from] postcard::Error),
+    #[error(
+        "an event of version {0}, written by an older wf: export the workforce with that version \
+         and sign it again with `wf import --resign <export.jsonl>`"
+    )]
+    OlderEvent(u16),
+    #[error("an event of version {0}, written by a newer wf")]
+    NewerEvent(u16),
+}
 
 impl EncodingError {
     /// Bytes that decode but are not the canonical encoding of what they decode to.
     pub(crate) fn malformed() -> Self {
-        EncodingError(postcard::Error::SerdeDeCustom)
+        EncodingError::Postcard(postcard::Error::SerdeDeCustom)
     }
 }
 
@@ -33,6 +42,12 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, EncodingError> {
     } else {
         Err(EncodingError::malformed())
     }
+}
+
+/// Decodes the value the bytes start with and leaves the rest unread: for the version of an
+/// event, which says how to read what follows it.
+pub(crate) fn decode_leading<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, EncodingError> {
+    Ok(postcard::take_from_bytes(bytes)?.0)
 }
 
 #[cfg(test)]
