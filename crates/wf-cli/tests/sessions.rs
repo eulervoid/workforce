@@ -1801,6 +1801,13 @@ async fn an_item_a_session_works_on_is_held_back_but_not_opened() {
         error.contains(&format!("wf session stop {}", short(&session))),
         "{error}"
     );
+    assert!(
+        error.contains(&format!("`wf item draft {}`", short(&item)))
+            && error.contains(&format!("`wf item cancel {}`", short(&item)))
+            && error.contains("from any machine")
+            && error.contains("on the session's machine"),
+        "{error}"
+    );
     assert_eq!(world.item(&item)["state"], "active");
 
     world.wf.run(&["item", "draft", short(&item)]);

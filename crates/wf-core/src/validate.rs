@@ -206,7 +206,7 @@ pub enum PolicyViolation {
     #[error("a session cannot move its own item to `done`; it submits the work instead")]
     SessionFinishesItsItem,
     #[error(
-        "#{} is held by the live work session {}, so it cannot be opened until that session ends: `wf session stop {}`", .item.short(), .session.short(), .session.short()
+        "#{} is held by the live work session {}, so it cannot be opened until that session ends; `wf item draft {}` or `wf item cancel {}` stops it after its current turn from any machine, then `wf item open {}`; `wf session stop {}` stops it at once, on the session's machine", .item.short(), .session.short(), .item.short(), .item.short(), .item.short(), .session.short()
     )]
     OpenWhileHeld { item: ItemId, session: SessionId },
     #[error(
