@@ -356,7 +356,8 @@ module, deleted once no log of the older version is left. It writes a new workfo
 
 * One genesis (the name and founder of the old one, this device only, the policy the old log ran on
   last, no `forked_from`), then every other event, in `(hlc, id)` order, as one feed of this device:
-  actor and `hlc` kept, `seq` renumbered, `deps` mapped. Every id an event names (items, sessions,
+  actor kept (the events of other devices are signed by this one in the same principal's name),
+  `hlc` kept (raised by the least step where two would tie), `seq` renumbered, `deps` mapped. Every id an event names (items, sessions,
   comments, `resolves`, `because`, `observed`, target moves, merge claims) is the new id of the event
   it named; `#refs` in titles, bodies and comments are rewritten, and so are the steps named by their
   text. An old→new map is written beside the new store.
@@ -369,7 +370,8 @@ module, deleted once no log of the older version is left. It writes a new workfo
   initial state.
 * Before the new store is kept, the old and the new log fold to the same items under the id map
   (title, body, state, step ticks, comments, links, review verdicts, merges, the target chain); the
-  import refuses otherwise. Local data keyed by ids (the work branches, agent repositories,
+  import refuses otherwise. It refuses too a log with a session that has not ended, an actor of
+  another principal, or a policy that does not read in the current form. Local data keyed by ids (the work branches, agent repositories,
   transcripts and session records) moves with the map; check logs, keyed by tree, carry over. The
   old data directory is left as it was, as the backup.
 
@@ -1832,7 +1834,9 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 4. Merging without the checks: `wf item merge --unchecked`, or edit the policy for a moment?
 5. Should the limit of two failed check runs be part of the recovery level?
 6. Batching several approved items into one checked merge, if checks get slow. Not before it hurts.
-7. A version byte per body instead of a new tag per layout change, before bodies change often.
+7. *Settled:* one tag per body, in its current layout; no version byte per body and no tags kept for
+   older layouts. A change of a layout is a new event version, and a log of an older version is signed
+   again with `wf import --resign` (section 6) while the log is small and has one principal.
 8. Prior art to read before M7: Radicle, p2panda, Keyhive, Matrix state resolution.
 9. Should the merge refuse to run checks outside the sandbox for work no principal reviewed (a `light`
    level, agents only)? Today it runs agent-written code with the principal's privileges after only

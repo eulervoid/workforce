@@ -191,3 +191,32 @@ wf import backup.jsonl           # adds them to the store of their workforce, or
 Each line has `content`, the event readable with `jq`, and `event`, its signed encoding. The daemon
 must not run during an import. For a `store.redb` that no longer opens, move it away and import a
 backup. The keys are not part of an export: back them up yourself.
+
+## Moving to a new event version
+
+A wf that writes a new event version refuses the store of an older one and says so: `an event of
+version 1, written by an older wf`. The workforce is signed again, as a new workforce with new ids,
+on the device that holds its principal key. Keep the older `wf` binary until this is done.
+
+1. With the old binary, rewrite the policy in the current form (`wf policy edit`): the new wf reads
+   only the policy the log ran on last, and refuses one it cannot read. Review steps are `agent` or
+   `principal`, and states are the fixed ones (`draft`, `open`, `active`, `review`, `done`,
+   `cancelled`).
+2. Let no session be live: `wf session list --live` shows none, then `wf daemon stop`. The import
+   refuses an export with a session that has not ended.
+3. With the old binary, export: `wf export > old.jsonl`.
+4. With the new binary, from the checkout: `wf import --resign old.jsonl`. It prints the new
+   workforce id, what was left out (policy events, invites, binds, other devices' profiles, a
+   fork's link to its parent), and what of this machine's data was moved: the repository and its
+   item branches, each item's agent repository, transcripts, session records and check logs. A map
+   of every old id to its new one, `resigned-ids.tsv`, is beside the new store. The checkout's
+   `.workforce.toml` and its remote `wf` now name the new workforce.
+5. Start the daemon (`wf daemon start`) and look around: `wf status`, `wf item list`.
+6. Other devices join the new workforce again: `wf invite device` here, `wf join` there.
+7. Archive the old workforce's directory under the data directory (`~/.local/share/workforce/<old
+   id>`), with its `principal.key`, somewhere only you can read; nothing reads it any more. A fork
+   leaves its parent's directory too: archive that as well.
+
+For the workforce of this repository the old id is `kjfllqz46iuxrcrez4e4kqnmvkuxdtbupjm7t3a5v5bno6qqniva`,
+and its fork `xjj47auggmhowcldvmnac2ggtaxmszsg6k6vv7s5wpfqxa2onmeq` is the one to export and sign
+again.
