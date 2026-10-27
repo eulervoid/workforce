@@ -911,7 +911,8 @@ default level; an item can name another (`--recovery`).
   are a `vcs` enum with one variant, so jj can be added without a format change.
 * **wf's own repository.** Each device keeps a bare repository, `<wf>/git`, with only the target and
   the item branches. Agent repositories take their alternates from it; imports, rebases, the check
-  worktree and merges work in it, and nothing in wf runs git in the principal's checkout. `wf init`
+  worktree and merges work in it; in the principal's checkout wf only keeps the target in step, below,
+  and fetches for `wf item checkout`. `wf init`
   makes it: from the checkout it is run in (when that is a git repository) it starts with the target
   and the `wf/*` branches the checkout has, and takes the checkout's own `user.*` and signing config,
   which is what the merge commits are made and signed by (`[commits] merge_signing =
@@ -927,6 +928,20 @@ default level; an item can name another (`--recovery`).
   `<wf>/git` makes it once, from the `<wf>/repository` an earlier version left (which it then
   removes), or empty. `wf item checkout` fetches from `wf` (the branches, else the commit itself)
   before it checks the work out.
+* **The checkout follows `<wf>/git`.** The CLI, never the daemon, which does not know the checkout,
+  compares the checkout's target with `<wf>/git`'s directly, without a fetch, and moves whichever is
+  behind where the other fast-forwards it, never inside a session. Behind: every command run in the
+  checkout, and the dashboard when the standing it shows changes, fast-forwards the checkout's target,
+  with `git merge --ff-only` when it is checked out (which refuses to touch uncommitted changes), and
+  otherwise by a fetch into the branch, which only fast-forwards and refuses a branch another worktree
+  has checked out or is rebasing. Ahead: `wf item add`, `wf item open`, `wf session start`, and the
+  dashboard when it starts or opens an item, push it to `<wf>/git`, unforced, which the daemon writes
+  as `TargetMoved` like any push. Either keeps `wf/<target>` in step and is said in one line
+  (`main: pushed 2 commits to wf`). Diverged, a move that failed, and ahead for the other commands:
+  every command warns on stderr (not with `--json`), `wf status` has a `target:` line with the git
+  command to run, and so does the dashboard's header; behind is only a hint there. Nothing rebases,
+  merges or force-pushes the principal's work. No machine config turns it off: it only does what
+  `git pull --ff-only` and `git push` would, and what it cannot do it leaves as it was.
 * One branch per item, `wf/<item>`, where `<item>` is the first 12 characters of the item id, and one
   **agent repository** per item, `<wf>/repos/<item>`: a repository of the agent's own, outside the
   principal's. Its `objects/info/alternates` points at `<wf>/git/objects`, it has no
