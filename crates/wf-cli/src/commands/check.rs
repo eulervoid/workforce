@@ -217,6 +217,7 @@ impl<'a> Machine<'a> {
                     socket,
                     data_dir,
                     machine_config: Some(config_path),
+                    harness: None,
                 },
                 config.check_sandbox(),
                 &config.environment,

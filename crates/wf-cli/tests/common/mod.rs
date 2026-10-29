@@ -30,6 +30,7 @@ fn clear_session_identity() {
             "WF_SESSION",
             "WF_SESSION_TOKEN",
             "WF_WORKFORCE",
+            "WF_DATA_DIR",
             "GIT_CONFIG_COUNT",
             "XDG_RUNTIME_DIR",
         ] {
@@ -81,6 +82,7 @@ impl Sandbox {
             .env_remove("WF_SESSION")
             .env_remove("WF_SESSION_TOKEN")
             .env_remove("WF_WORKFORCE")
+            .env_remove("WF_DATA_DIR")
             // A session's `commit.gpgsign=false` would win over a test repository's signing.
             .env_remove("GIT_CONFIG_COUNT");
         inherit_only_stdio(&mut command);

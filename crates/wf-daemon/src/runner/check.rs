@@ -280,6 +280,7 @@ impl Daemon {
                         socket: &self.launch.socket,
                         data_dir: &self.launch.data_dir,
                         machine_config: self.launch.machine_config.as_deref(),
+                        harness: None,
                     },
                     sandbox,
                     &config.environment,

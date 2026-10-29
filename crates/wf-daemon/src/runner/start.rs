@@ -9,7 +9,7 @@ use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::item::ItemEntry;
 use wf_core::lifecycle::{Interruption, SessionEnd};
-use wf_core::name::AgentName;
+use wf_core::name::{AgentName, HarnessName};
 use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::{AgentDefinition, State};
 use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
@@ -32,13 +32,22 @@ pub(super) fn sandboxed(
         .workforce_directory(run.workforce)
         .join("sandbox")
         .join(format!("{}.json", run.session));
-    sandboxed_in(daemon, &run.sandbox, &run.directory, &profile_file, agent)
+    sandboxed_in(
+        daemon,
+        &run.sandbox,
+        &run.harness,
+        &run.directory,
+        &profile_file,
+        agent,
+    )
 }
 
-/// `agent` in `sandbox`, working in `directory`; Fence's sandbox profile is written to `profile_file`.
+/// `agent`, which runs `harness`, in `sandbox`, working in `directory`; Fence's sandbox profile is
+/// written to `profile_file`.
 pub(crate) fn sandboxed_in(
     daemon: &Daemon,
     sandbox: &SandboxConfig,
+    harness: &HarnessName,
     directory: &std::path::Path,
     profile_file: &std::path::Path,
     agent: AcpAgentConfig,
@@ -55,6 +64,7 @@ pub(crate) fn sandboxed_in(
         socket: &daemon.launch.socket,
         data_dir: &daemon.launch.data_dir,
         machine_config: daemon.launch.machine_config.as_deref(),
+        harness: wf_harness::KnownHarness::from_name(harness.as_str()),
     };
     crate::sandbox::wrap(config, &access, &agent, profile_file).map_err(|error| error.to_string())
 }
