@@ -1538,7 +1538,7 @@ agents with the principal's privileges, and then `allow` is treated as `ask`.
   principal inherits an API key or token (`CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`,
   `GEMINI_API_KEY`, a provider's key), or sets the harness's variable to their own directory and
   adds it to `allow_write`. A harness that reports at start that it needs a login ends the session
-  with an error that names both.
+  with an error that names both, unless the machine config already moves the harness's directory.
 * **Caches:** wf sets none. The tools an agent runs (cargo, npm, bun, uv, pre-commit) cannot write
   their caches in the principal's home; the principal gives agents caches of their own through
   `[environment] set` and `allow_write`, apart from the principal's own caches.

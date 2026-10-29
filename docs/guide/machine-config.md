@@ -111,8 +111,9 @@ allow_write = ["~/.codex"]
 
 The variables are `CLAUDE_CONFIG_DIR` (`~/.claude`), `CODEX_HOME` (`~/.codex`), `GEMINI_CLI_HOME`
 (`~`, with `~/.gemini` in `allow_write`) and, for OpenCode, `XDG_DATA_HOME` (`~/.local/share`, with
-`~/.local/share/opencode` in `allow_write`). When a harness says at start that it needs a login, the
-session ends and `wf status` names these ways.
+`~/.local/share/opencode` in `allow_write`). `inherit` works too, with the daemon's value. When a
+harness says at start that it needs a login, the session ends and `wf status` says so; while the
+harness keeps its state in wf's directory, it also names these ways.
 
 ## The environment
 

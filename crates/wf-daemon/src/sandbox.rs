@@ -25,7 +25,7 @@ use serde_json::json;
 use wf_harness::{AcpAgentConfig, KnownHarness};
 
 use crate::data_dir::DataDir;
-use crate::machine_config::FenceConfig;
+use crate::machine_config::{EnvironmentConfig, FenceConfig};
 
 /// What the agent is let to touch besides its directory, and what of wf it must not.
 pub struct Access<'a> {
@@ -115,8 +115,19 @@ fn harness_variables(harness: KnownHarness, home: &Path) -> Vec<(&'static str, S
 }
 
 /// What the principal can do when `harness`, run in Fence with its state in `home`, says that it
-/// needs a login.
-pub(crate) fn login_help(harness: KnownHarness, home: &Path) -> String {
+/// needs a login; none when `environment` sets or inherits the variable of its directory, so that
+/// it keeps its state where the principal chose.
+pub(crate) fn login_help(
+    harness: KnownHarness,
+    home: &Path,
+    environment: &EnvironmentConfig,
+) -> Option<String> {
+    let (variable, _) = harness_variables(harness, home)[0];
+    if environment.set.contains_key(variable)
+        || environment.inherit.iter().any(|name| name == variable)
+    {
+        return None;
+    }
     let home = home.display();
     let ways = match harness {
         KnownHarness::ClaudeCode => {
@@ -139,10 +150,10 @@ pub(crate) fn login_help(harness: KnownHarness, home: &Path) -> String {
              `~/.local/share/opencode` to `[sandbox] allow_write`"
         }
     };
-    format!(
+    Some(format!(
         "in Fence, {} keeps its state in {home} and does not find the principal's login there: {ways}",
         harness.name()
-    )
+    ))
 }
 
 /// The sandbox profile Fence runs the agent with.
@@ -555,11 +566,29 @@ mod tests {
     fn the_login_help_names_where_the_harness_keeps_its_state_and_how_to_move_it() {
         let home = Path::new("/data/harness/x");
         for harness in KnownHarness::ALL {
-            let help = login_help(harness, home);
+            let help = login_help(harness, home, &EnvironmentConfig::default()).unwrap();
             let (variable, _) = harness_variables(harness, home)[0].clone();
             for part in [variable, "allow_write", "inherit", "/data/harness/x"] {
                 assert!(help.contains(part), "{harness:?} names {part}: {help}");
             }
+        }
+    }
+
+    #[test]
+    fn there_is_no_login_help_when_the_config_moves_the_harness_directory() {
+        let home = Path::new("/data/harness/x");
+        for harness in KnownHarness::ALL {
+            let (variable, _) = harness_variables(harness, home)[0];
+            let set = EnvironmentConfig {
+                set: [(variable.to_string(), "/home/ada/.harness".to_string())].into(),
+                ..EnvironmentConfig::default()
+            };
+            let inherited = EnvironmentConfig {
+                inherit: vec![variable.to_string()],
+                ..EnvironmentConfig::default()
+            };
+            assert_eq!(login_help(harness, home, &set), None, "{harness:?}");
+            assert_eq!(login_help(harness, home, &inherited), None, "{harness:?}");
         }
     }
 

@@ -571,14 +571,17 @@ fn harness_fault(daemon: &Daemon, run: &Run, fault: HarnessFault, what: String) 
 }
 
 /// The harness of the session says it needs a login, as `error` tells. In Fence, where a harness
-/// keeps its state in a directory of wf's, the principal is told how to give it one.
+/// keeps its state in a directory of wf's unless the machine config moves it, the principal is
+/// told how to give it one.
 fn login_lapsed(daemon: &Daemon, run: &Run, error: &wf_harness::Error) -> End {
     let mut what = wf_core::error_chain(error);
     let harness = wf_harness::KnownHarness::from_name(run.harness.as_str());
     match (&run.sandbox, harness) {
         (SandboxConfig::Fence(_), Some(harness)) => {
             let home = daemon.launch.data_dir.harness_home(harness);
-            what = format!("{what}; {}", crate::sandbox::login_help(harness, &home));
+            if let Some(help) = crate::sandbox::login_help(harness, &home, &run.environment) {
+                what = format!("{what}; {help}");
+            }
         }
         (SandboxConfig::Fence(_) | SandboxConfig::Off {}, _) => {}
     }
