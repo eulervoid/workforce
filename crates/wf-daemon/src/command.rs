@@ -382,6 +382,7 @@ mod tests {
                         socket: Path::new("/nonexistent/daemon.sock"),
                         data_dir: &DataDir::new(self.repository.root.path().to_path_buf()),
                         machine_config: None,
+                        harness: None,
                     },
                     sandbox,
                     environment,

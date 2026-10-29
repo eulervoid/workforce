@@ -21,6 +21,7 @@ use super::resume::AgentSessionRecord;
 use super::start::sandboxed;
 use super::{Begin, CANCEL_GRACE, End, GRACE, Run, SILENCE_LIMIT, START_TIMEOUT, Stop, blocking};
 use crate::faults::Faults;
+use crate::machine_config::SandboxConfig;
 use crate::{Daemon, Loaded};
 
 /// The task of one session: runs the harness, and ends the session if nobody else does.
@@ -154,6 +155,10 @@ async fn drive(
         .env(crate::caller::SESSION_VARIABLE, run.session.to_string())
         .env(crate::caller::SESSION_TOKEN_VARIABLE, token.to_string())
         .env(crate::caller::WORKFORCE_VARIABLE, run.workforce.to_string())
+        .env(
+            crate::data_dir::DATA_DIR_VARIABLE,
+            daemon.launch.data_dir.root().to_string_lossy(),
+        )
         .env("PATH", path.to_string_lossy());
     for (name, value) in &run.git_environment {
         agent = agent.env(name, value);
@@ -203,12 +208,7 @@ async fn drive(
     let mut conversation = match started {
         Ok(conversation) => conversation,
         Err(error) if error.needs_login() => {
-            return harness_fault(
-                daemon,
-                run,
-                HarnessFault::LoginLapsed,
-                wf_core::error_chain(&error),
-            );
+            return login_lapsed(daemon, run, &error);
         }
         Err(error) if error.usage_limit(Timestamp::now()).is_some() => {
             return usage_limit(daemon, run, &error);
@@ -368,12 +368,7 @@ async fn turns(
         let (_stop_reason, last_message) = match result {
             Ok(reply) => reply,
             Err(error) if error.needs_login() => {
-                return harness_fault(
-                    daemon,
-                    run,
-                    HarnessFault::LoginLapsed,
-                    wf_core::error_chain(&error),
-                );
+                return login_lapsed(daemon, run, &error);
             }
             Err(error) if error.usage_limit(Timestamp::now()).is_some() => {
                 return usage_limit(daemon, run, &error);
@@ -573,6 +568,24 @@ fn transcript_failed(faults: &Faults, path: &Path, error: &std::io::Error) -> En
 fn harness_fault(daemon: &Daemon, run: &Run, fault: HarnessFault, what: String) -> End {
     daemon.faults.note_harness(&run.harness, fault, what, None);
     End::Interrupt(Interruption::MachineFault(fault.into()))
+}
+
+/// The harness of the session says it needs a login, as `error` tells. In Fence, where a harness
+/// keeps its state in a directory of wf's unless the machine config moves it, the principal is
+/// told how to give it one.
+fn login_lapsed(daemon: &Daemon, run: &Run, error: &wf_harness::Error) -> End {
+    let mut what = wf_core::error_chain(error);
+    let harness = wf_harness::KnownHarness::from_name(run.harness.as_str());
+    match (&run.sandbox, harness) {
+        (SandboxConfig::Fence(_), Some(harness)) => {
+            let home = daemon.launch.data_dir.harness_home(harness);
+            if let Some(help) = crate::sandbox::login_help(harness, &home, &run.environment) {
+                what = format!("{what}; {help}");
+            }
+        }
+        (SandboxConfig::Fence(_) | SandboxConfig::Off {}, _) => {}
+    }
+    harness_fault(daemon, run, HarnessFault::LoginLapsed, what)
 }
 
 /// The harness of the session says its usage limit is reached, as `error` tells: the session

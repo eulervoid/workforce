@@ -1,6 +1,8 @@
 //! The data directory, `$XDG_DATA_HOME/workforce/`: the one place that spells out what is in it.
 //!
 //! ```text
+//! bin/wf                      the `wf` agents run, installed by the daemon
+//! harness/<harness>/          the state of a harness wf starts in Fence, shared by its agents
 //! keys/device.key             the device key
 //! keys/device-ssh             the device key as an SSH key, for signing merges
 //! keys/principal.token        the token that makes a connection act as the principal
@@ -23,9 +25,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use data_encoding::HEXLOWER;
 use wf_core::id::{SessionId, WorkforceId};
 use wf_core::identity::{DeviceSigner, PrincipalSigner};
+use wf_harness::KnownHarness;
 
 use crate::caller::{SESSION_TOKEN_VARIABLE, Token};
 use crate::client::{ClientError, DaemonClient};
+
+/// The data directory, which the daemon sets in sessions so that `wf` finds it whatever
+/// `XDG_DATA_HOME` the harness is given.
+pub const DATA_DIR_VARIABLE: &str = "WF_DATA_DIR";
 
 /// Named once, for the path and for the glob that denies it to agents.
 const PRINCIPAL_KEY_FILE: &str = "principal.key";
@@ -63,8 +70,13 @@ impl DataDir {
         Self { root }
     }
 
-    /// `$XDG_DATA_HOME/workforce`, falling back to `~/.local/share/workforce`.
+    /// `$WF_DATA_DIR`, which the daemon sets in sessions, or else `$XDG_DATA_HOME/workforce`,
+    /// falling back to `~/.local/share/workforce`. A session's harness may have its own
+    /// `XDG_DATA_HOME`.
     pub fn from_env() -> Result<Self, DataDirError> {
+        if let Some(root) = std::env::var_os(DATA_DIR_VARIABLE).filter(|value| !value.is_empty()) {
+            return Ok(Self::new(PathBuf::from(root)));
+        }
         let base = match std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
             Some(path) => PathBuf::from(path),
             None => PathBuf::from(std::env::var_os("HOME").ok_or(DataDirError::NoHome)?)
@@ -101,10 +113,10 @@ impl DataDir {
         self.root.join("bin")
     }
 
-    /// The `CARGO_HOME` of sandboxed agents: the registry and git checkouts they download, whose
-    /// build scripts the principal's own cargo never runs.
-    pub fn agent_cargo_home(&self) -> PathBuf {
-        self.root.join("cargo")
+    /// Where a harness wf starts in Fence keeps its config, state and sessions, instead of the
+    /// principal's home, which agents cannot write. One per machine, shared by its agents.
+    pub fn harness_home(&self, harness: KnownHarness) -> PathBuf {
+        self.root.join("harness").join(harness.name())
     }
 
     pub fn workforce(&self, id: &WorkforceId) -> PathBuf {

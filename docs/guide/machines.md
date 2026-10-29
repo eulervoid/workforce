@@ -162,6 +162,7 @@ supports that.
 | copies of the transcripts of your other machines' sessions, a cache you can delete | `~/.local/share/workforce/<workforce id>/transcript-copies/` |
 | your principal key, one per workforce | `~/.local/share/workforce/<workforce id>/principal.key` |
 | this machine's device key | `~/.local/share/workforce/keys/device.key` |
+| the settings, state and sessions of a harness agents run in the sandbox | `~/.local/share/workforce/harness/<harness>/` |
 | the machine config | `~/.config/workforce/config.toml` |
 | the workforce id, so `wf` finds the workforce | `.workforce.toml` in the repository |
 

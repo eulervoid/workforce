@@ -166,6 +166,7 @@ impl WorkforceJudges {
         let command = crate::runner::sandboxed_in(
             daemon,
             &machine_config.sandbox_of(agent),
+            &definition.harness,
             &directory,
             &profile_file,
             command,

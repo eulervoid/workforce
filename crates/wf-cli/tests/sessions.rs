@@ -892,6 +892,30 @@ wf work release --note \"I cannot do this\"
     assert!(!git_in(&world.bare(), &["branch", "--list", "wf/*"]).is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn wf_finds_its_data_directory_when_the_harness_moves_xdg_data_home() {
+    // As OpenCode is given an `XDG_DATA_HOME` of its own in Fence, on a machine without a runtime
+    // directory, such as macOS, where the socket is in the data directory.
+    let script = "\
+sh ln -s \"$XDG_RUNTIME_DIR/workforce/daemon.sock\" \"$XDG_DATA_HOME/workforce/daemon.sock\"
+sh env -u XDG_RUNTIME_DIR XDG_DATA_HOME=\"$PWD/elsewhere\" \"$WF_BIN\" work release --note moved
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Moved"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "released");
+    let shown = world.item(&item);
+    assert!(
+        comments(&shown)
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note["text"] == "moved"),
+        "{shown}"
+    );
+}
+
 /// The events of the log, read from the daemon of the world.
 fn logged_events(world: &World) -> Vec<wf_core::event::Event> {
     let socket = world.wf.root.path().join("run/workforce/daemon.sock");

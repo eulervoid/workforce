@@ -6,25 +6,26 @@
 //!
 //! The profile is Fence's `code` template (Fence 0.1.67) with these changes, written out here
 //! because a profile that extends a template can only add to its lists:
-//! - no writing to all of `~/.config` and `~/.local/share`, where wf keeps its config, keys,
-//!   stores and the repositories of other items;
+//! - nothing in the principal's home is writable: not `~/.config` and `~/.local/share`, where wf
+//!   keeps its config, keys, stores and the repositories of other items, and not the caches of
+//!   package managers or the directories of the harnesses either, as each of them holds code the
+//!   principal runs later, outside the sandbox. The harness wf starts keeps its state in a
+//!   directory of wf's instead ([`DataDir::harness_home`]); anything more is the principal's to
+//!   allow, with `allow_write` in the machine config;
 //! - no deny on writing `**/*.key`, which kept `wf init` and the test suites from writing keys in
 //!   their temporary directories; the keys wf keeps are denied where they are instead;
 //! - the paths of wf that would let an agent act outside its sandbox are denied;
-//! - the config of the harnesses, and cargo's registry, are not writable: both run code with the
-//!   principal's privileges the next time the principal runs the harness or builds. Agents get a
-//!   `CARGO_HOME` of their own instead;
-//! - key files are denied below each writable path but the agents' `CARGO_HOME`, not everywhere:
-//!   Fence writes every deny after every allow, so a deny of `**/*.pem` would keep cargo from
-//!   unpacking a crate that ships one as a test fixture.
+//! - key files are denied below the agent's directory and temporary files, not everywhere: Fence
+//!   writes every deny after every allow, so a deny of `**/*.pem` would keep cargo from unpacking
+//!   a crate that ships one as a test fixture into a `CARGO_HOME` the principal allows.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
-use wf_harness::AcpAgentConfig;
+use wf_harness::{AcpAgentConfig, KnownHarness};
 
 use crate::data_dir::DataDir;
-use crate::machine_config::FenceConfig;
+use crate::machine_config::{EnvironmentConfig, FenceConfig};
 
 /// What the agent is let to touch besides its directory, and what of wf it must not.
 pub struct Access<'a> {
@@ -36,6 +37,9 @@ pub struct Access<'a> {
     pub data_dir: &'a DataDir,
     /// The machine config, which says whether agents run in a sandbox at all.
     pub machine_config: Option<&'a Path>,
+    /// The harness wf starts, which keeps its state in its directory in `data_dir`; none for a
+    /// check, which starts no harness, and for a harness wf does not know.
+    pub harness: Option<KnownHarness>,
 }
 
 /// Whether `fence` is a file in one of the directories of `PATH`.
@@ -58,11 +62,8 @@ pub(crate) fn wrap(
         profile_file,
         serde_json::to_vec_pretty(&profile(config, access))?,
     )?;
-    // Made here, as Fence leaves out a path to write to that does not exist.
-    let cargo_home = access.data_dir.agent_cargo_home();
-    std::fs::create_dir_all(&cargo_home)?;
     // Fence allows writes to "." of the directory it runs in, so it has to start there.
-    Ok(AcpAgentConfig::new("sh")
+    let mut wrapped = AcpAgentConfig::new("sh")
         .arg("-c")
         .arg(r#"cd "$1" && shift && exec "$@""#)
         .arg("sh")
@@ -73,19 +74,96 @@ pub(crate) fn wrap(
         .arg("--")
         .arg(agent.command().to_string_lossy())
         .args(agent.arguments())
-        .envs(agent.environment())
-        .env(CARGO_HOME, cargo_home.to_string_lossy()))
+        .envs(agent.environment());
+    if let Some(harness) = access.harness {
+        let home = access.data_dir.harness_home(harness);
+        // Made here, as Fence leaves out a path to write to that does not exist.
+        std::fs::create_dir_all(&home)?;
+        for (name, value) in harness_variables(harness, &home) {
+            wrapped = wrapped.env(name, value);
+        }
+    }
+    Ok(wrapped)
 }
 
-/// Set by wf in Fence, so the machine config must not set or inherit it there.
-pub(crate) const CARGO_HOME: &str = "CARGO_HOME";
+/// The variables that have `harness` keep its config, state and sessions in `home`. The machine
+/// config may set them otherwise, such as to the principal's own directory of the harness, which
+/// it then has to allow writing to.
+fn harness_variables(harness: KnownHarness, home: &Path) -> Vec<(&'static str, String)> {
+    let below = |name: &str| home.join(name).to_string_lossy().into_owned();
+    let home = home.to_string_lossy().into_owned();
+    match harness {
+        KnownHarness::ClaudeCode => {
+            let mut variables = vec![("CLAUDE_CONFIG_DIR", home)];
+            // With its config directory moved, Claude Code looks for its login in a keychain item
+            // named after the directory; empty, this keeps it to the item of the principal's login.
+            // Not documented by Claude Code: should it go, the login error says what else to do.
+            if cfg!(target_os = "macos") {
+                variables.push(("CLAUDE_SECURESTORAGE_CONFIG_DIR", String::new()));
+            }
+            variables
+        }
+        KnownHarness::Codex => vec![("CODEX_HOME", home)],
+        KnownHarness::GeminiCli => vec![("GEMINI_CLI_HOME", home)],
+        // `wf` in the session finds the data directory through `WF_DATA_DIR`.
+        KnownHarness::Opencode => vec![
+            ("XDG_DATA_HOME", below("data")),
+            ("XDG_STATE_HOME", below("state")),
+            ("XDG_CACHE_HOME", below("cache")),
+        ],
+    }
+}
+
+/// What the principal can do when `harness`, run in Fence with its state in `home`, says that it
+/// needs a login; none when `environment` sets or inherits the variable of its directory, so that
+/// it keeps its state where the principal chose.
+pub(crate) fn login_help(
+    harness: KnownHarness,
+    home: &Path,
+    environment: &EnvironmentConfig,
+) -> Option<String> {
+    let (variable, _) = harness_variables(harness, home)[0];
+    if environment.set.contains_key(variable)
+        || environment.inherit.iter().any(|name| name == variable)
+    {
+        return None;
+    }
+    let home = home.display();
+    let ways = match harness {
+        KnownHarness::ClaudeCode => {
+            "give agents a token from `claude setup-token` as `CLAUDE_CODE_OAUTH_TOKEN`, or \
+             `ANTHROPIC_API_KEY`, with `[environment] inherit`; or set `CLAUDE_CONFIG_DIR` to \
+             `~/.claude` with `[environment] set` and add `~/.claude` to `[sandbox] allow_write`"
+        }
+        KnownHarness::Codex => {
+            "give agents `CODEX_API_KEY` or `OPENAI_API_KEY` with `[environment] inherit`; or set \
+             `CODEX_HOME` to `~/.codex` with `[environment] set` and add `~/.codex` to \
+             `[sandbox] allow_write`"
+        }
+        KnownHarness::GeminiCli => {
+            "give agents `GEMINI_API_KEY` with `[environment] inherit`; or set `GEMINI_CLI_HOME` to \
+             `~` with `[environment] set` and add `~/.gemini` to `[sandbox] allow_write`"
+        }
+        KnownHarness::Opencode => {
+            "give agents the API key of the provider with `[environment] inherit`; or set \
+             `XDG_DATA_HOME` to `~/.local/share` with `[environment] set` and add \
+             `~/.local/share/opencode` to `[sandbox] allow_write`"
+        }
+    };
+    Some(format!(
+        "in Fence, {} keeps its state in {home} and does not find the principal's login there: {ways}",
+        harness.name()
+    ))
+}
 
 /// The sandbox profile Fence runs the agent with.
 fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
-    let writable: Vec<PathBuf> = [access.directory.to_path_buf(), access.socket.to_path_buf()]
-        .into_iter()
-        .chain(config.allow_write.iter().cloned())
-        .collect();
+    let paths = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let own: Vec<PathBuf> = [
+        paths(ALLOW_WRITE),
+        vec![access.directory.to_path_buf(), access.socket.to_path_buf()],
+    ]
+    .concat();
 
     // With these an agent signs as the device or the principal, has the daemon act for the
     // principal, or turns its sandbox off.
@@ -97,28 +175,29 @@ fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
             .map(Path::to_path_buf),
     );
     // With this an agent has git run its code, outside the sandbox, the next time the principal
-    // runs git. Fence already denies `~/.gitconfig`.
+    // runs git, should the principal allow writing to a directory above it. Fence already denies
+    // `~/.gitconfig`.
     let git_config = [PathBuf::from("~/.config/git")];
 
-    let paths = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-    let mut allow_write: Vec<PathBuf> = [paths(ALLOW_WRITE), writable].concat();
-    // Fence writes every deny after every allow, so key files are denied below each writable
-    // directory but the agents' cargo home, which holds no keys of the principal: it is wf's, made
-    // for agents.
-    let key_files: Vec<PathBuf> = allow_write
+    // Fence writes every deny after every allow, so key files are denied only below the agent's
+    // own directory and temporary files. What the principal allows, and the harness's directory of
+    // wf's, which holds no keys of the principal, stay writable whole.
+    let key_files: Vec<PathBuf> = own
         .iter()
         .chain(&paths(FENCE_ALLOW_WRITE))
         .flat_map(|root| key_files_below(root))
         .collect();
-    allow_write.push(access.data_dir.agent_cargo_home());
+    let allow_write: Vec<PathBuf> = own
+        .into_iter()
+        .chain(config.allow_write.iter().cloned())
+        .chain(
+            access
+                .harness
+                .map(|harness| access.data_dir.harness_home(harness)),
+        )
+        .collect();
     let deny_read: Vec<PathBuf> = [paths(DENY_READ), secrets.clone()].concat();
-    let deny_write: Vec<PathBuf> = [
-        key_files,
-        paths(HARNESS_CONFIG),
-        secrets,
-        git_config.to_vec(),
-    ]
-    .concat();
+    let deny_write: Vec<PathBuf> = [key_files, secrets, git_config.to_vec()].concat();
     let allowed_domains: Vec<&str> = ALLOWED_DOMAINS
         .iter()
         .copied()
@@ -209,112 +288,9 @@ const DENIED_DOMAINS: &[&str] = &[
     "*.sentry.io",
 ];
 
-const ALLOW_WRITE: &[&str] = &[
-    ".",
-    "/tmp",
-    "~/.cache/**",
-    "~/.cache",
-    // Claude Code
-    "~/.claude*",
-    "~/.claude/**",
-    // Amp
-    "~/.amp",
-    // Codex
-    "~/.codex/**",
-    // Cursor
-    "~/.cursor/**",
-    // OpenCode
-    "~/.opencode/**",
-    "~/.local/state/**",
-    // Gemini CLI
-    "~/.gemini/**",
-    // Factory CLI (droid)
-    "~/.factory/**",
-    // Pi
-    "~/.pi/**",
-    // Copilot
-    "~/.copilot/**",
-    // Kiro CLI
-    "~/.kiro/**",
-    "~/Library/Application Support/kiro-cli/**",
-    // Package manager caches
-    "~/.npm/_cacache",
-    "~/.npm/_npx",
-    "~/.bun/**",
-    // Shell completion cache
-    "~/.zcompdump*",
-];
-
-/// What of the harnesses' directories in [`ALLOW_WRITE`] the harness runs or follows when the
-/// principal starts it, outside the sandbox: settings with hooks and MCP servers, commands, agents,
-/// skills, plugins, instructions, the status line script, editor extensions and the harness's own
-/// binary. Their state, sessions and auth stay writable. `~/.claude.json` holds Claude Code's state
-/// and its user-scope MCP servers in one file, so it stays writable too, and so do the scripts
-/// settings point to elsewhere in `~/.claude`.
-const HARNESS_CONFIG: &[&str] = &[
-    // Claude Code
-    "~/.claude/settings.json",
-    "~/.claude/settings.local.json",
-    "~/.claude/CLAUDE.md",
-    "~/.claude/hooks",
-    "~/.claude/commands",
-    "~/.claude/agents",
-    "~/.claude/skills",
-    "~/.claude/plugins",
-    "~/.claude/output-styles",
-    "~/.claude/statusline*",
-    "~/.claude/local",
-    // Amp
-    "~/.amp/bin",
-    // Codex
-    "~/.codex/config.toml",
-    "~/.codex/hooks.json",
-    "~/.codex/AGENTS.md",
-    "~/.codex/prompts",
-    "~/.codex/skills",
-    "~/.codex/rules",
-    // Cursor
-    "~/.cursor/cli-config.json",
-    "~/.cursor/mcp.json",
-    "~/.cursor/rules",
-    "~/.cursor/commands",
-    "~/.cursor/hooks.json",
-    "~/.cursor/extensions",
-    // OpenCode, whose config is in `~/.config`
-    "~/.opencode/bin",
-    // Gemini CLI
-    "~/.gemini/settings.json",
-    "~/.gemini/GEMINI.md",
-    "~/.gemini/commands",
-    "~/.gemini/extensions",
-    // Factory CLI (droid)
-    "~/.factory/settings.json",
-    "~/.factory/mcp.json",
-    "~/.factory/AGENTS.md",
-    "~/.factory/droids",
-    "~/.factory/commands",
-    "~/.factory/hooks",
-    "~/.factory/skills",
-    // Pi
-    "~/.pi/agent/settings.json",
-    "~/.pi/agent/AGENTS.md",
-    "~/.pi/agent/extensions",
-    "~/.pi/agent/skills",
-    "~/.pi/agent/prompts",
-    // Copilot
-    "~/.copilot/mcp-config.json",
-    "~/.copilot/agents",
-    "~/.copilot/skills",
-    "~/.copilot/hooks",
-    "~/.copilot/pkg",
-    // Kiro CLI
-    "~/.kiro/settings",
-    "~/.kiro/agents",
-    "~/.kiro/steering",
-    "~/.kiro/prompts",
-    "~/.kiro/hooks",
-    "~/.kiro/extensions",
-];
+/// What every agent writes besides its directory: the directory Fence starts in, which is its
+/// directory, and temporary files.
+const ALLOW_WRITE: &[&str] = &[".", "/tmp"];
 
 /// Directories Fence allows writing to itself, whatever the profile says, besides devices and its
 /// temporary directory in `/tmp`.
@@ -324,7 +300,6 @@ const FENCE_ALLOW_WRITE: &[&str] = &["~/.npm/_logs", "~/.fence/debug"];
 const KEY_FILES: &[&str] = &[".env", ".env.*", "*.pem", "*.p12", "*.pfx"];
 
 /// Globs of the key files anywhere below `root`, a path or a glob that Fence allows writing to.
-/// What a glob root matches itself stays writable: `~/.claude*` allows `~/.claude.pem`.
 fn key_files_below(root: &Path) -> impl Iterator<Item = PathBuf> {
     let root = root.to_string_lossy();
     let root = PathBuf::from(root.strip_suffix("/**").unwrap_or(&root));
@@ -404,6 +379,7 @@ mod tests {
             socket: Path::new("/run/wf/daemon.sock"),
             data_dir: Box::leak(Box::new(DataDir::new(PathBuf::from(DATA)))),
             machine_config: Some(Path::new("/home/ada/.config/workforce/config.toml")),
+            harness: Some(KnownHarness::ClaudeCode),
         }
     }
 
@@ -467,12 +443,13 @@ mod tests {
             ]
         );
         assert_eq!(wrapped.environment()["WF_SESSION"], "s1");
-        let cargo_home = data_dir.agent_cargo_home();
+        let home = data_dir.harness_home(KnownHarness::ClaudeCode);
         assert_eq!(
-            wrapped.environment()["CARGO_HOME"],
-            cargo_home.to_str().unwrap()
+            wrapped.environment()["CLAUDE_CONFIG_DIR"],
+            home.to_str().unwrap()
         );
-        assert!(cargo_home.is_dir());
+        assert!(home.is_dir());
+        assert!(!wrapped.environment().contains_key("CARGO_HOME"));
 
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&profile_file).unwrap()).unwrap();
@@ -525,83 +502,115 @@ mod tests {
     }
 
     #[test]
-    fn the_harnesses_config_cannot_be_written() {
+    fn nothing_in_the_principals_home_is_writable() {
         for path in [
+            "~/.cache/pre-commit/repo/hooks.py",
+            "~/.cache/uv/x",
+            "~/.npm/_cacache/index-v5/x",
+            "~/.npm/_npx/x/node_modules/a/index.js",
+            "~/.bun/bin/claude",
+            "~/.bun/install/cache/x",
+            "~/.local/state/x",
+            "~/.zcompdump",
+            "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.0/build.rs",
+            "~/.cargo/bin/cargo",
+            "~/.claude.json",
             "~/.claude/settings.json",
+            "~/.claude/.credentials.json",
             "~/.claude/hooks/notify.sh",
-            "~/.claude/commands/deploy.md",
-            "~/.claude/agents/helper.md",
-            "~/.claude/skills/review/SKILL.md",
-            "~/.claude/plugins/marketplaces/x/plugin.json",
             "~/.codex/config.toml",
-            "~/.codex/rules/default.rules",
-            "~/.claude/statusline.sh",
-            "~/.claude/statusline-command.sh",
-            "~/.claude/local/claude",
+            "~/.codex/auth.json",
+            "~/.gemini/settings.json",
+            "~/.config/opencode/opencode.json",
+            "~/.local/share/opencode/bin/x",
             "~/.amp/bin/amp",
             "~/.cursor/mcp.json",
-            "~/.cursor/hooks.json",
-            "~/.cursor/extensions/x/extension.js",
-            "~/.opencode/bin/opencode",
-            "~/.gemini/settings.json",
-            "~/.gemini/extensions/x/gemini-extension.json",
-            "~/.factory/settings.json",
-            "~/.pi/agent/extensions/x.ts",
-            "~/.copilot/mcp-config.json",
-            "~/.copilot/pkg/universal/0.0.1/index.js",
-            "~/.kiro/settings/mcp.json",
-            "~/.kiro/extensions/x/extension.js",
         ] {
-            assert!(covers("denyWrite", path), "{path} is not writable");
+            assert!(!covers("allowWrite", path), "{path} is not writable");
         }
     }
 
     #[test]
-    fn the_harnesses_keep_their_state_sessions_and_auth() {
+    fn the_harness_keeps_its_state_in_its_directory_of_wfs() {
         for path in [
-            "~/.claude.json",
-            "~/.claude/.credentials.json",
-            "~/.claude/projects/-work-repo/session.jsonl",
-            "~/.claude/todos/x.json",
-            "~/.codex/auth.json",
-            "~/.codex/sessions/2026/10/21/rollout.jsonl",
-            "~/.gemini/oauth_creds.json",
-            "~/.gemini/tmp/x/chats/session.json",
-            "~/.factory/sessions/x.jsonl",
-            "~/.copilot/session-state/x.jsonl",
+            "/home/ada/.local/share/workforce/harness/claude-code/.claude.json",
+            "/home/ada/.local/share/workforce/harness/claude-code/settings.json",
+            "/home/ada/.local/share/workforce/harness/claude-code/projects/-work-repo/s.jsonl",
+            "/home/ada/.local/share/workforce/harness/claude-code/key.pem",
         ] {
             assert!(covers("allowWrite", path), "{path} is writable");
             assert!(!covers("denyWrite", path), "{path} is not denied");
         }
-    }
-
-    #[test]
-    fn agents_build_with_a_cargo_home_of_their_own() {
-        for path in [
-            "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.0/build.rs",
-            "~/.cargo/git/checkouts/x/build.rs",
-            "~/.cargo/bin/cargo",
-            "~/.cargo/config.toml",
-        ] {
-            assert!(!covers("allowWrite", path), "{path} is not writable");
-        }
-        assert!(covers(
+        assert!(!covers(
             "allowWrite",
-            "/home/ada/.local/share/workforce/cargo/registry/src/x/serde-1.0.0/build.rs"
+            "/home/ada/.local/share/workforce/harness/codex/config.toml"
         ));
     }
 
     #[test]
-    fn key_files_are_denied_everywhere_but_in_the_agents_cargo_home() {
+    fn every_harness_is_given_its_directory() {
+        let home = Path::new("/data/harness/x");
+        for harness in KnownHarness::ALL {
+            let variables = harness_variables(harness, home);
+            assert!(!variables.is_empty(), "{harness:?}");
+            for (name, value) in variables {
+                assert!(
+                    value.is_empty() || Path::new(&value).starts_with(home),
+                    "{harness:?} {name}={value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_login_help_names_where_the_harness_keeps_its_state_and_how_to_move_it() {
+        let home = Path::new("/data/harness/x");
+        for harness in KnownHarness::ALL {
+            let help = login_help(harness, home, &EnvironmentConfig::default()).unwrap();
+            let (variable, _) = harness_variables(harness, home)[0].clone();
+            for part in [variable, "allow_write", "inherit", "/data/harness/x"] {
+                assert!(help.contains(part), "{harness:?} names {part}: {help}");
+            }
+        }
+    }
+
+    #[test]
+    fn there_is_no_login_help_when_the_config_moves_the_harness_directory() {
+        let home = Path::new("/data/harness/x");
+        for harness in KnownHarness::ALL {
+            let (variable, _) = harness_variables(harness, home)[0];
+            let set = EnvironmentConfig {
+                set: [(variable.to_string(), "/home/ada/.harness".to_string())].into(),
+                ..EnvironmentConfig::default()
+            };
+            let inherited = EnvironmentConfig {
+                inherit: vec![variable.to_string()],
+                ..EnvironmentConfig::default()
+            };
+            assert_eq!(login_help(harness, home, &set), None, "{harness:?}");
+            assert_eq!(login_help(harness, home, &inherited), None, "{harness:?}");
+        }
+    }
+
+    #[test]
+    fn a_check_has_no_harness_directory() {
+        let access = Access {
+            harness: None,
+            ..access()
+        };
+        let profile = profile(&config(), &access);
+        let written = serde_json::to_string(&profile["filesystem"]["allowWrite"]).unwrap();
+        assert!(!written.contains("/harness"), "{written}");
+    }
+
+    #[test]
+    fn key_files_are_denied_in_the_agents_directory_and_temporary_files() {
         for path in [
             "/home/ada/.local/share/workforce/w1/repos/k3f9/.env",
             "/home/ada/.local/share/workforce/w1/repos/k3f9/deploy/key.pem",
             "/home/ada/.local/share/workforce/w1/repos/k3f9/.env.local",
             "/tmp/cert.p12",
             "/tmp/x/cert.pfx",
-            "~/.cache/x/key.pem",
-            "~/.claude/key.pem",
-            "/opt/cache/key.pem",
             "./key.pem",
             "~/.npm/_logs/key.pem",
             "~/.fence/debug/.env",
@@ -609,8 +618,8 @@ mod tests {
             assert!(covers("denyWrite", path), "{path} is not writable");
         }
         for path in [
-            "/home/ada/.local/share/workforce/cargo/registry/src/x/ed25519-3.0.0/tests/examples/pkcs8-v1.pem",
-            "/home/ada/.local/share/workforce/cargo/registry/src/x/dotenvy-0.15.7/.env",
+            "/opt/cache/registry/src/x/ed25519-3.0.0/tests/examples/pkcs8-v1.pem",
+            "/opt/cache/registry/src/x/dotenvy-0.15.7/.env",
         ] {
             assert!(covers("allowWrite", path), "{path} is writable");
             assert!(!covers("denyWrite", path), "{path} is not denied");
@@ -619,9 +628,14 @@ mod tests {
 
     /// Runs `script` as the agent, in Fence with the profile `wrap` writes, and says whether it
     /// succeeded.
-    fn in_fence(access: &Access<'_>, profile_file: &Path, script: &str) -> bool {
+    fn in_fence(
+        config: &FenceConfig,
+        access: &Access<'_>,
+        profile_file: &Path,
+        script: &str,
+    ) -> bool {
         let agent = AcpAgentConfig::new("sh").arg("-c").arg(script);
-        let wrapped = wrap(&FenceConfig::default(), access, &agent, profile_file).unwrap();
+        let wrapped = wrap(config, access, &agent, profile_file).unwrap();
         std::process::Command::new(wrapped.command())
             .args(wrapped.arguments())
             .envs(wrapped.environment())
@@ -631,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn a_crate_with_key_files_unpacks_into_the_agents_cargo_home_in_fence() {
+    fn in_fence_the_harness_writes_its_directory_and_cargo_unpacks_key_files_where_allowed() {
         if wf_core::testing::skip_in_fence("Fence in Fence denies what the outer one denies") {
             return;
         }
@@ -669,21 +683,46 @@ mod tests {
             ..access()
         };
         let profile_file = root.join("sandbox/session.json");
+        // A `CARGO_HOME` the principal set up for agents, as the guide shows.
+        let cargo_home = root.join("cargo");
+        std::fs::create_dir(&cargo_home).unwrap();
+        let config = FenceConfig {
+            allow_write: vec![cargo_home.clone()],
+            ..FenceConfig::default()
+        };
+
+        assert!(in_fence(
+            &config,
+            &access,
+            &profile_file,
+            r#"echo '{}' > "$CLAUDE_CONFIG_DIR/settings.json""#
+        ));
+        assert!(
+            data_dir
+                .harness_home(KnownHarness::ClaudeCode)
+                .join("settings.json")
+                .is_file()
+        );
 
         // As cargo unpacks a crate it downloaded into its registry.
         let unpack = format!(
-            r#"mkdir -p "$CARGO_HOME/registry/src/index" && tar -xzf '{}' -C "$CARGO_HOME/registry/src/index""#,
-            crate_file.display()
+            "mkdir -p '{registry}' && tar -xzf '{}' -C '{registry}'",
+            crate_file.display(),
+            registry = cargo_home.join("registry/src/index").display()
         );
-        assert!(in_fence(&access, &profile_file, &unpack));
+        assert!(in_fence(&config, &access, &profile_file, &unpack));
         assert!(
-            data_dir
-                .agent_cargo_home()
+            cargo_home
                 .join("registry/src/index/ed25519-3.0.0/tests/examples/pkcs8-v1.pem")
                 .is_file()
         );
 
-        assert!(!in_fence(&access, &profile_file, "echo key > key.pem"));
+        assert!(!in_fence(
+            &config,
+            &access,
+            &profile_file,
+            "echo key > key.pem"
+        ));
         assert!(!repository.join("key.pem").exists());
     }
 
@@ -716,6 +755,16 @@ mod tests {
             "~/.local/share/workforce/w1/store.redb",
             "~/.local/share/workforce/w1/repos/other/src/main.rs",
             "~/.local/share/workforce/bin/wf",
+            "/home/ada/.local/share/workforce/bin/wf",
+            "/home/ada/.local/share/workforce/keys/device.key",
+            "/home/ada/.local/share/workforce/daemon.pid",
+            "/home/ada/.local/share/workforce/daemon.log",
+            "/home/ada/.local/share/workforce/new-file",
+            "/home/ada/.local/share/workforce/cargo/registry/src/x/build.rs",
+            "/home/ada/.local/share/workforce/harness/opencode/data/opencode/bin/x",
+            "/home/ada/.local/share/workforce/w1/store.redb",
+            "/home/ada/.local/share/workforce/w1/sandbox/s1.json",
+            "/home/ada/.local/share/workforce/w1/repos/other/src/main.rs",
         ] {
             assert!(!covers("allowWrite", path), "{path} is not writable");
         }
