@@ -1591,7 +1591,8 @@ An agent's environment is only: what wf sets (`WF_SESSION`, `WF_SESSION_TOKEN`, 
 through `GIT_CONFIG_*`, and in Fence the variables that give the harness its directory); what every program expects (`HOME`, `USER`, `LOGNAME`,
 `SHELL`, `TMPDIR`, `LANG`, `LC_*`, `XDG_*_HOME`); and what the machine config inherits or sets, for
 all agents or one (the agent's value wins). wf's own variables cannot be set or inherited there; the
-variables of the harness's directory can, and the machine config's value wins, which is how the
+variables of the harness's directory can, and replace wf's, whether set or inherited (an inherited
+one the daemon does not have is then unset, and the harness uses its default), which is how the
 principal hands an agent their own login. A variable allows nothing in the sandbox by itself: a
 directory to write to also goes in `allow_write`.
 

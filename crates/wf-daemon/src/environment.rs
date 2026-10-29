@@ -1,7 +1,7 @@
 //! The environment an agent runs with: what wf sets, what the machine config names, and the few
 //! variables every program expects. Nothing else of the daemon's environment reaches it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use wf_harness::AcpAgentConfig;
 
@@ -27,18 +27,28 @@ const KEPT: &[&str] = &[
 /// `agent` with the variables `config` sets, started through `env -u` so that the variables of
 /// the daemon's environment (`daemon`) it does not keep are removed. Only their names are on the
 /// command line; the values of what is set stay out of it.
+///
+/// What `config` names wins over what `agent` was given: a variable it inherits has the daemon's
+/// value, or none, even where wf gave the agent one, such as the directory of its harness. The
+/// variables wf must set itself, such as `WF_SESSION`, the config cannot name.
 pub(crate) fn confine(
     agent: AcpAgentConfig,
     config: &EnvironmentConfig,
     daemon: impl IntoIterator<Item = String>,
 ) -> AcpAgentConfig {
-    let agent = agent.envs(config.set.clone());
+    let environment: BTreeMap<String, String> = agent
+        .environment()
+        .iter()
+        .filter(|(name, _)| !config.inherit.contains(name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .chain(config.set.clone())
+        .collect();
     let removed: BTreeSet<String> = daemon
         .into_iter()
         .filter(|name| {
             !KEPT.contains(&name.as_str())
                 && !config.inherit.contains(name)
-                && !agent.environment().contains_key(name)
+                && !environment.contains_key(name)
         })
         .collect();
     let mut confined = AcpAgentConfig::new("/usr/bin/env");
@@ -49,7 +59,7 @@ pub(crate) fn confine(
         .arg("--")
         .arg(agent.command().to_string_lossy())
         .args(agent.arguments())
-        .envs(agent.environment())
+        .envs(environment)
 }
 
 /// The names of the variables of the daemon's environment. A name that is not UTF-8 cannot be
@@ -99,5 +109,33 @@ mod tests {
         assert_eq!(confined.environment()["WF_SESSION"], "s1");
         assert_eq!(confined.environment()["CARGO_TARGET_DIR"], "/cache/target");
         assert!(!confined.environment().contains_key("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn what_the_config_names_wins_over_the_directory_wf_gives_the_harness() {
+        let agent = AcpAgentConfig::new("codex-acp")
+            .env("CODEX_HOME", "/data/harness/codex")
+            .env("CLAUDE_CONFIG_DIR", "/data/harness/claude-code")
+            .env("XDG_DATA_HOME", "/data/harness/opencode/data");
+        let config = EnvironmentConfig {
+            inherit: vec!["CODEX_HOME".to_string(), "XDG_DATA_HOME".to_string()],
+            set: [(
+                "CLAUDE_CONFIG_DIR".to_string(),
+                "/home/ada/.claude".to_string(),
+            )]
+            .into(),
+        };
+        let daemon = ["HOME", "CODEX_HOME"].map(String::from);
+
+        let confined = confine(agent, &config, daemon);
+
+        assert_eq!(confined.arguments(), ["--", "codex-acp"]);
+        // Without a value of wf's, the agent has the daemon's, or none.
+        assert!(!confined.environment().contains_key("CODEX_HOME"));
+        assert!(!confined.environment().contains_key("XDG_DATA_HOME"));
+        assert_eq!(
+            confined.environment()["CLAUDE_CONFIG_DIR"],
+            "/home/ada/.claude"
+        );
     }
 }

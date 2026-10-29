@@ -136,7 +136,8 @@ Values under `set` are expanded when the config is read: `~`, `$NAME` and `${NAM
 daemon's environment, and `$$` is a literal `$`. A variable that is not set is an error. A relative
 path is relative to the agent's directory, its repository. wf's own variables (`PATH`, `WF_*`,
 `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, `GIT_CONFIG_*`) cannot be set or inherited here; the
-variables of a harness's directory can, and your value wins.
+variables of a harness's directory can, and replace wf's: with your value under `set`, or under
+`inherit` with the daemon's, or none when the daemon has none, so the harness uses its default.
 
 Setting a variable allows nothing by itself: a directory an agent is to write to goes in
 `allow_write` as well.
