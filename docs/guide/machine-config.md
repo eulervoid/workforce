@@ -16,12 +16,12 @@ A complete example:
 ```toml
 [sandbox]
 kind = "fence"
-allow_write = ["~/.cache/workforce/target"]
+allow_write = ["~/.cache/workforce"]
 allow_domains = ["*.example.com"]
 
 [environment]
 inherit = ["ANTHROPIC_API_KEY"]
-set = { CARGO_TARGET_DIR = "~/.cache/workforce/target" }
+set = { CARGO_TARGET_DIR = "~/.cache/workforce/target", CARGO_HOME = "~/.cache/workforce/agents/cargo" }
 
 [agent.coder]
 environment = { set = { RUST_LOG = "debug" } }
@@ -50,22 +50,22 @@ state.review = "bold yellow"
 The daemon runs every agent in [Fence](https://github.com/fencesandbox/fence), which has to be
 installed. Inside it, an agent may:
 
-* write in its own repository and talk to the daemon (your repository is read-only to it);
-* write the state, sessions and login of its harness, and caches;
+* write in its own repository, temporary files, and talk to the daemon (your repository is
+  read-only to it);
+* write the settings, state and sessions of its harness, which wf keeps in
+  `~/.local/share/workforce/harness/<harness>` instead of your `~/.claude`, `~/.codex` and so on;
 * reach model APIs and package registries.
 
-Everything else is denied. Whatever you add, an agent never reads wf's keys or config, and never
-changes git's config or the config of a harness (settings, hooks, commands, agents, skills,
-plugins, MCP servers): those run the next time *you* run git or the harness, outside the sandbox.
-For the same reason agents build with a cargo home of their own,
-`~/.local/share/workforce/cargo`, and do not touch the registry in your `~/.cargo`; your
-`~/.cargo/config.toml` does not apply to them. Agents cannot write `.env*` or key files (`*.pem`,
-`*.p12`, `*.pfx`) in the directories they may write, but in that cargo home, where crates ship
-them as test fixtures. Some gaps remain: agents can write `~/.claude.json`, where Claude Code
-keeps its state and its user-scope MCP servers in one file, scripts your Claude Code settings point
-to, caches such as `~/.npm/_npx` and `~/.bun`, and key files that a writable pattern matches
-itself, such as `~/.claude.pem` (see SPEC §13). Because the sandbox holds agents in, an agent with
+Everything else is denied, your home included: what an agent writes in `~/.cache`, `~/.npm`,
+`~/.bun`, `~/.cargo` or a harness's directory would run the next time *you* run `npx`, a global
+install, pre-commit, a build or the harness, outside the sandbox. Whatever you add, an agent never
+reads wf's keys or config, and never changes git's config. Agents cannot write `.env*` or key files
+(`*.pem`, `*.p12`, `*.pfx`) in their repository and temporary files; what you allow with
+`allow_write` they can write whole. Because the sandbox holds agents in, an agent with
 `--permissions allow` (the default) is allowed what it asks without anyone being asked.
+
+Anything more an agent needs, a cache or your own login of a harness, is yours to allow, knowing
+that what an agent writes there you may run later:
 
 ```toml
 [sandbox]
@@ -76,14 +76,50 @@ allow_domains = ["*.example.com"]   # more domains agents may reach
 
 `kind = "off"` runs agents with your own privileges. Then an agent set to `allow` is asked instead:
 each permission request goes through the deciders and then to you. `allow_write` and
-`allow_domains` are refused with `kind = "off"`, since there is nothing to add them to.
+`allow_domains` are refused with `kind = "off"`, since there is nothing to add them to; agents then
+use your own harness directories and caches.
+
+### Harness logins
+
+The harness's directory of wf's is shared by the agents of the machine, so it is set up once. Your
+own settings, instructions, skills and MCP servers of the harness do not apply to agents. Whether
+your login is found there depends on the harness:
+
+| Harness | Your login in the sandbox |
+|---|---|
+| `claude-code` | found on macOS, in the keychain; on Linux, inherit `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` |
+| `codex` | inherit `CODEX_API_KEY` or `OPENAI_API_KEY` |
+| `gemini-cli` | inherit `GEMINI_API_KEY` |
+| `opencode` | API keys of providers from the environment work when inherited; OAuth logins (Claude, Copilot, ChatGPT) are not found |
+
+```toml
+[environment]
+inherit = ["CLAUDE_CODE_OAUTH_TOKEN"]
+```
+
+To give agents your own login stored in a file instead, point the harness at your directory and
+allow writing it, as a token refresh rewrites the file. Agents then also run with, and can change,
+your settings of that harness, hooks and MCP servers included:
+
+```toml
+[environment]
+set = { CODEX_HOME = "~/.codex" }
+
+[sandbox]
+allow_write = ["~/.codex"]
+```
+
+The variables are `CLAUDE_CONFIG_DIR` (`~/.claude`), `CODEX_HOME` (`~/.codex`), `GEMINI_CLI_HOME`
+(`~`, with `~/.gemini` in `allow_write`) and, for OpenCode, `XDG_DATA_HOME` (`~/.local/share`, with
+`~/.local/share/opencode` in `allow_write`). When a harness says at start that it needs a login, the
+session ends and `wf status` names these ways.
 
 ## The environment
 
 Agents do not get the daemon's environment. They get:
 
-* what wf sets: `WF_SESSION`, `WF_WORKFORCE`, `PATH`, their git identity and, in Fence,
-  `CARGO_HOME`;
+* what wf sets: `WF_SESSION`, `WF_WORKFORCE`, `WF_DATA_DIR`, `PATH`, their git identity and, in
+  Fence, the directory of their harness;
 * what every program expects: `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `LC_ALL`,
   `LC_CTYPE` and the `XDG_*_HOME` directories;
 * what the machine config names.
@@ -99,8 +135,8 @@ set = { CARGO_TARGET_DIR = "~/.cache/workforce/target" }
 Values under `set` are expanded when the config is read: `~`, `$NAME` and `${NAME}` come from the
 daemon's environment, and `$$` is a literal `$`. A variable that is not set is an error. A relative
 path is relative to the agent's directory, its repository. wf's own variables (`PATH`, `WF_*`,
-`GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, `GIT_CONFIG_*`, and `CARGO_HOME` when agents or checks run
-in Fence) cannot be set or inherited here.
+`GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, `GIT_CONFIG_*`) cannot be set or inherited here; the
+variables of a harness's directory can, and your value wins.
 
 Setting a variable allows nothing by itself: a directory an agent is to write to goes in
 `allow_write` as well.
@@ -120,6 +156,24 @@ allow_write = ["~/.cache/workforce/target"]
 ```
 
 The same works for other build tools with a cache directory set by a variable.
+
+### Caches of package managers
+
+wf gives agents no caches: cargo, npm, bun, uv or pre-commit run in the sandbox cannot write theirs
+in your home, so a build that downloads dependencies fails. Give agents caches of their own, in one
+directory apart from yours, as what an agent puts there is code your tools would run:
+
+```toml
+[environment]
+set = { CARGO_HOME = "~/.cache/workforce/agents/cargo", npm_config_cache = "~/.cache/workforce/agents/npm", BUN_INSTALL = "~/.cache/workforce/agents/bun", XDG_CACHE_HOME = "~/.cache/workforce/agents/cache" }
+
+[sandbox]
+allow_write = ["~/.cache/workforce/agents"]
+```
+
+Agents then download the crates and packages once for the machine. Your `~/.cargo/config.toml`
+does not apply to them, and nothing they install globally lands on your `PATH`. Checks run with
+the same environment and sandbox, so they need the same setup.
 
 ## Storage
 

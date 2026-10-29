@@ -108,6 +108,7 @@ harnesses inherit it rather than the 256 a macOS terminal gives; it logs a warni
 | `<data>/keys/principal.token` | the principal token (section 5) |
 | `<data>/keys/device-ssh` | the device key as an OpenSSH key, for signing merges |
 | `<data>/bin/wf` | the daemon's copy of its own binary, first on the agents' `PATH` |
+| `<data>/harness/<harness>/` | the config, state and sessions of a harness agents run in Fence (section 13) |
 | `<data>/daemon.pid`, `<data>/daemon.log` | the daemon (`WF_LOG` sets the `tracing` filter) |
 | `$XDG_RUNTIME_DIR/workforce/daemon.sock` | the socket (else `<data>/daemon.sock`), 0600 in a 0700 directory |
 | `<wf>/principal.key` | the principal key for this workforce |
@@ -1511,19 +1512,36 @@ template. Without Fence installed, sessions fail; there is no silent fallback. `
 agents with the principal's privileges, and then `allow` is treated as `ask`.
 
 * **Write:** the session's directory (its own repository, whole: `.git` included), temporary files,
-  `~/.cache` and the caches and state of agent tools and package managers, the daemon's socket, and
-  `allow_write`. Not `.env*` or key files (`*.pem`, `*.p12`, `*.pfx`) below any of these, nor below
-  the directories Fence allows writing to itself (`~/.npm/_logs`, `~/.fence/debug`): one global
-  deny could not leave the cargo home out, as Fence writes every deny after every allow and the
-  last rule wins. What a writable pattern matches itself stays writable: `~/.claude*` allows
-  `~/.claude.pem`. The principal's repository is read-only, and so are the repositories of other
-  items.
-* **Cargo:** agents get `CARGO_HOME=<data>/cargo`, shared by the agents of the machine; the
-  principal's `~/.cargo` is not writable, as cargo runs the `build.rs` of its registry with the
-  principal's privileges at the principal's next build. The principal's `~/.cargo/config.toml` does
-  not apply to agents. The cargo home holds no keys of the principal, so agents may write key files
-  there: cargo unpacks crates that ship `.pem` test fixtures whole. A crate cargo could not unpack
-  whole gets no `.cargo-ok`, and cargo unpacks it again at the next build that needs it.
+  the daemon's socket, the directory of the session's harness in wf's data directory
+  (`<data>/harness/<harness>`), and `allow_write`. Nothing else: not the principal's home, whose
+  caches and harness directories hold code the principal runs later, outside the sandbox (`npx` runs
+  packages from `~/.npm/_npx`, `~/.bun/bin` is on the principal's `PATH`, `~/.cache` holds e.g.
+  pre-commit's hook repositories, a harness runs the hooks and MCP servers of its settings), and no
+  other part of `<data>` (`bin/wf`, `keys`, `daemon.*`, the other harnesses' directories, the
+  repositories of other items). The principal's repository is read-only. Not `.env*` or key files
+  (`*.pem`, `*.p12`, `*.pfx`) below the session's directory and temporary files, nor below the
+  directories Fence allows writing to itself (`~/.npm/_logs`, `~/.fence/debug`). What `allow_write`
+  names and the harness's directory are writable whole: Fence writes every deny after every allow
+  and the last rule wins, so a deny there would keep cargo from unpacking a crate that ships `.pem`
+  test fixtures into a `CARGO_HOME` the principal allows.
+* **Harnesses:** the harness wf starts keeps its config, state and sessions in
+  `<data>/harness/<harness>`, shared by the agents of the machine, through its own variable:
+  `CLAUDE_CONFIG_DIR` (Claude Code), `CODEX_HOME` (Codex), `GEMINI_CLI_HOME` (Gemini CLI), and
+  `XDG_DATA_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME` below it (OpenCode). The principal's
+  settings, instructions, skills and MCP servers of the harness do not apply to agents; what one
+  agent writes into the shared settings (a hook, an MCP server) runs in the sessions of the others,
+  in the sandbox. The daemon sets `WF_DATA_DIR` in sessions, so that `wf` finds the data directory
+  whatever `XDG_DATA_HOME` the harness has. On macOS Claude Code also gets
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR` empty, with which it keeps using the keychain item of the
+  principal's login; the variable is not documented by Claude Code. Every other login is not found
+  from wf's directory (Claude Code on Linux, Codex, Gemini CLI, OpenCode's OAuth providers): the
+  principal inherits an API key or token (`CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`,
+  `GEMINI_API_KEY`, a provider's key), or sets the harness's variable to their own directory and
+  adds it to `allow_write`. A harness that reports at start that it needs a login ends the session
+  with an error that names both.
+* **Caches:** wf sets none. The tools an agent runs (cargo, npm, bun, uv, pre-commit) cannot write
+  their caches in the principal's home; the principal gives agents caches of their own through
+  `[environment] set` and `allow_write`, apart from the principal's own caches.
 * **Network:** model APIs, git hosts and package registries, plus `allow_domains`; cloud metadata and
   telemetry are denied. Local binding and outbound connections to local ports stay allowed, as
   tests bind and reach local ports; a local service that trusts any local caller is reachable from
@@ -1534,30 +1552,16 @@ agents with the principal's privileges, and then `allow` is treated as `ask`.
   * reading or writing the device key, principal keys, the principal token and the machine config,
     with which an agent could sign as the device or the principal, have the daemon act for the
     principal, or turn its sandbox off;
-  * writing git's own config (`~/.config/git`), with which git would run the agent's code outside the sandbox;
-  * writing the config of the harnesses, which they run or follow when the principal starts them
-    outside the sandbox: settings with hooks and MCP servers, commands, agents, skills, plugins,
-    rules, instructions (`CLAUDE.md`, `AGENTS.md`), Claude Code's status line script, the extensions
-    of the Cursor and Kiro editors and the harnesses' own binaries (Claude Code's local install,
-    Amp, OpenCode, Copilot's updates). Their state, sessions and login stay writable;
+  * writing git's own config (`~/.config/git`), with which git would run the agent's code outside
+    the sandbox, also when `allow_write` names a directory above it;
   * reading SSH and GPG keys and the credentials of clouds, registries and docker.
 
 `wf` in a session reads no key: the daemon signs what it writes.
 
-**Remaining gaps:** agents can still write some code that the principal runs later, outside the
-sandbox:
-
-* `~/.claude.json` holds both Claude Code's state, which it writes while it runs, and the
-  principal's user-scope `mcpServers`, so it cannot be denied: an agent can add an MCP server there
-  that the principal's Claude Code starts.
-* The scripts Claude Code's settings point to outside the denied paths, such as a hook command in
-  `~/.claude/scripts`, are not denied (a denylist cannot know them); only the common
-  `~/.claude/statusline*` is. An agent can rewrite such a script and the principal's Claude Code
-  runs it.
-* Caches hold code too: `npx` runs packages from `~/.npm/_npx`, `~/.bun` holds bun's global
-  installs and their `bin`, and `~/.cache` holds e.g. pre-commit's hook repositories (#vfbuiv).
-
-A `CLAUDE_CONFIG_DIR` of each agent's own closes the first two later.
+**Remaining gaps:** what the principal adds to `allow_write` can hold code they run later, outside
+the sandbox: their own directory of a harness, given to agents for their login, holds its settings
+with hooks and MCP servers; a cache the principal's own tools read holds what an agent put there.
+Which of these agents need is the principal's call, not a default.
 
 **What can outlive a session** (section 9): its processes are found by the mark in their
 environment, and on macOS an orphan of an Apple program by its directory, so
@@ -1583,12 +1587,13 @@ the daemon never packs or prunes it itself; the principal's own git does as it a
 ### Environment
 
 An agent's environment is only: what wf sets (`WF_SESSION`, `WF_SESSION_TOKEN`, `WF_WORKFORCE`,
-`PATH` with `<data>/bin` first, `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, signing through
-`GIT_CONFIG_*`, and `CARGO_HOME` in Fence); what every program expects (`HOME`, `USER`, `LOGNAME`,
+`WF_DATA_DIR`, `PATH` with `<data>/bin` first, `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, signing
+through `GIT_CONFIG_*`, and in Fence the variables that give the harness its directory); what every program expects (`HOME`, `USER`, `LOGNAME`,
 `SHELL`, `TMPDIR`, `LANG`, `LC_*`, `XDG_*_HOME`); and what the machine config inherits or sets, for
-all agents or one (the agent's value wins). wf's own variables cannot be set or inherited there,
-`CARGO_HOME` included when agents or checks run in Fence. A variable allows nothing in the sandbox
-by itself: a directory to write to also goes in `allow_write`.
+all agents or one (the agent's value wins). wf's own variables cannot be set or inherited there; the
+variables of the harness's directory can, and the machine config's value wins, which is how the
+principal hands an agent their own login. A variable allows nothing in the sandbox by itself: a
+directory to write to also goes in `allow_write`.
 
 ### Planned: secrets and transcripts (M3, M7)
 

@@ -19,6 +19,11 @@ its ACP adapter, and log in to it as you normally would:
 `wf init` lists the ones it finds on your `PATH`. `wf harness models <harness>` starts one and lists
 the models it offers.
 
+In the sandbox a harness keeps its settings and sessions in a directory of wf's, not in yours, so
+your own settings, instructions and MCP servers of the harness do not apply to agents, and on most
+setups your login is not found there either. How to give agents a login is in
+[machine-config.md](machine-config.md#harness-logins).
+
 ## Defining agents
 
 ```sh
