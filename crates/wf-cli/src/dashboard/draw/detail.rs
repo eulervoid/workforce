@@ -144,17 +144,14 @@ pub(super) fn draw_notice(frame: &mut Frame, app: &App, area: Rect) {
     let Some((title, what)) = app.selected_notice() else {
         return;
     };
-    let text = Text::from(vec![
-        Line::from(vec![themed("! ", theme::attention()), Span::raw(title)]),
-        Line::default(),
-        Line::from(what).themed(theme::text_dimmed()),
-    ]);
     let area = Rect {
         x: area.x + 1,
         width: area.width.saturating_sub(1),
         ..area
     };
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), padded(area));
+    let width = usize::from(padded(area).width);
+    let text = crate::render::machine_notice_for(title, what, Some(width));
+    frame.render_widget(Paragraph::new(ansi_text(&text)), padded(area));
 }
 
 fn dimmed(text: String) -> Line<'static> {

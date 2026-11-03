@@ -332,45 +332,4 @@ mod tests {
             .unwrap();
         assert_eq!(events, [first, own]);
     }
-
-    #[tokio::test]
-    async fn zz_bench() {
-        use wf_core::testing::{comment, create};
-        let fixture = Fixture::new(1);
-        let storage = handle(&fixture);
-        let mut state = fixture.state();
-        let mut clock = 2_000;
-        let mut items = vec![];
-        let mut events = vec![];
-        for i in 0..70 {
-            clock += 1;
-            let e = fixture.apply(&mut state, 0, clock, create("task", &format!("t{i}")));
-            items.push(ItemId::from(e.id()));
-            events.push(e);
-        }
-        for i in 0..6300 {
-            clock += 1;
-            let item = items[i % 70];
-            events.push(fixture.apply(&mut state, 0, clock, comment(item, &format!("some reasonably long comment text number {i} about things and stuff, with details of the work done so far"))));
-        }
-        storage.with(move |r| for e in events { r.receive(e).unwrap(); }).await.unwrap();
-        let t = std::time::Instant::now();
-        let old = storage.with(move |replica| {
-            let item = items[5];
-            let mut kept = vec![]; let mut pos = 0;
-            loop {
-                let page = wf_store::EventStore::log_page(replica.store(), pos, 512).unwrap();
-                if page.is_empty() { break kept; }
-                pos += page.len() as u64;
-                kept.extend(page.into_iter().filter(|e| replica.state().can_be_activity_of(item, e)));
-            }
-        }).await.unwrap();
-        eprintln!("OLD {:?} n={}", t.elapsed(), old.len());
-        let item = ItemId::from(old[0].id());
-        for round in 0..3 {
-            let t = std::time::Instant::now();
-            let new = storage.item_events(vec![item]).await.unwrap().unwrap();
-            eprintln!("NEW round {round} {:?} n={}", t.elapsed(), new.len());
-        }
-    }
 }

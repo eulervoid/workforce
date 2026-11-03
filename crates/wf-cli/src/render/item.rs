@@ -566,6 +566,12 @@ fn notice_box(entries: Vec<Notice>, width: Option<usize>) -> String {
     out
 }
 
+/// What is wrong with the machine, or a push that lost, in the notice box of an item without the
+/// item: its heading, and what it is and what to do about it.
+pub fn machine_notice_for(title: &str, what: &str, width: Option<usize>) -> String {
+    notice_box(vec![(theme::error(), title, vec![what.to_owned()])], width)
+}
+
 /// A flag of `wf status` alone, in the notice box of an item: its heading, what is wrong, and the
 /// command that fixes it on a line of its own.
 pub fn flag_detail_for(flag: &Flag, width: Option<usize>) -> String {
