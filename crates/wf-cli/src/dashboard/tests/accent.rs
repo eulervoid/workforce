@@ -6,7 +6,7 @@ use crate::dashboard::snapshot::Detail;
 use crate::theme;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::style::Style;
-use wf_core::id::SessionId;
+use wf_core::id::{HashId, SessionId};
 
 #[test]
 fn the_part_with_the_keys_has_the_accent_and_the_other_the_dimmed_accent() {
@@ -17,12 +17,14 @@ fn the_part_with_the_keys_has_the_accent_and_the_other_the_dimmed_accent() {
         press(&mut app, KeyCode::Char('j'));
     }
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
+    let spans = snapshot.working[1].item;
+    snapshot.in_view = Some(item_in_view(spans, "Spans\n".to_owned(), Some(blocked)));
     app.refresh(snapshot.clone());
     // The parked coder is selected on line 9; the breadcrumb is on line 3, right of the list.
     let row = 9;
-    let (crumb_x, crumb_y) = find(&mut app, 130, 14, "coder · work");
-    assert_eq!(app.wanted().detail, Some(Detail::Session(blocked)));
+    let (crumb_x, crumb_y) = find(&mut app, 130, 14, &format!("▐#{}", HashId::short(&spans)));
+    let crumb_x = crumb_x + 1;
+    assert_eq!(app.wanted().detail, Some(Detail::Item(spans)));
     assert_eq!(Drawn::of(&mut app, 130, 14).bg_at(30, row), Some(accent()));
     assert_eq!(
         Drawn::of(&mut app, 130, 14).bg_at(crumb_x, crumb_y),
@@ -69,15 +71,16 @@ fn the_accent_goes_to_the_breadcrumb_on_enter_and_back_on_esc() {
     let coder = app.snapshot.working[0].clone();
     let (_, row) = find(&mut app, 60, 16, "wants:");
     assert_eq!(Drawn::of(&mut app, 60, 16).bg_at(10, row), Some(accent()));
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
-    let (column, crumb_y) = find(&mut app, 60, 16, "coder · work");
+    let (column, crumb_y) = find(&mut app, 60, 16, "coder/");
     assert_eq!(
         Drawn::of(&mut app, 60, 16).bg_at(column, crumb_y),
         Some(accent())
     );
+    press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Esc);
     assert_eq!(Drawn::of(&mut app, 60, 16).bg_at(10, row), Some(accent()));
 }
@@ -89,10 +92,18 @@ fn the_last_part_of_the_breadcrumb_has_its_ends_in_its_accent() {
     for _ in 0..4 {
         press(&mut app, KeyCode::Char('j'));
     }
+    // The parked coder opened through its item, with the keys back to the list.
+    let parked = app.snapshot.working[1].id;
+    open_through_item(&mut app, parked);
+    press(&mut app, KeyCode::Char('H'));
+    press(&mut app, KeyCode::Char('L'));
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
     app.refresh(snapshot.clone());
-    let crumb = "coder · work · 40m ◇ parked";
+    let crumb = &format!(
+        "◇ coder/{} · 40m · parked",
+        HashId::short(&snapshot.working[1].id)
+    );
     // The list has the keys: the ends are dimmed with the rest of the highlight.
     assert_ends(&mut app, 130, 14, crumb, accent_dimmed());
     press(&mut app, KeyCode::Char('l'));
@@ -104,14 +115,14 @@ fn the_last_part_of_the_breadcrumb_has_its_ends_in_its_accent() {
 fn a_breadcrumb_cut_short_leaves_out_the_end_of_its_highlight() {
     let mut app = app();
     let coder = app.snapshot.working[0].clone();
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     // Wide enough for the text and its end, for the text only, and for neither.
-    let (column, row) = find(&mut app, 60, 16, "◆▌");
-    let fits = column + 1;
-    for (width, last) in [(fits + 1, "▌"), (fits, "◆"), (fits - 5, "…")] {
+    let (column, row) = find(&mut app, 60, 16, "12m▌");
+    let fits = column + 3;
+    for (width, last) in [(fits + 1, "▌"), (fits, "m"), (fits - 5, "…")] {
         assert_eq!(
             Drawn::of(&mut app, width, 16).symbol_at(width - 1, row),
             last

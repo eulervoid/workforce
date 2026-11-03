@@ -34,7 +34,7 @@ fn transcript_app() -> App {
     entries.extend(long_call(1, "1", "first"));
     entries.extend(long_call(3, "2", "second"));
     app.transcribed(coder.id, &entries);
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);

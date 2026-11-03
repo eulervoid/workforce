@@ -5,7 +5,7 @@ use crate::dashboard::app::NowRow;
 use crate::dashboard::snapshot::{Detail, InView, Snapshot};
 use crate::view::SessionStatus;
 use ratatui::crossterm::event::KeyCode;
-use wf_core::id::SessionId;
+use wf_core::id::{HashId, SessionId};
 use wf_core::session::EndReason;
 
 /// The snapshot once the coder's session was stopped, with its permission request gone, and the
@@ -34,7 +34,7 @@ fn an_open_session_that_ends_says_so_and_offers_the_session_its_item_goes_on_in(
     let mut app = app();
     let coder = app.snapshot.working[0].clone();
     app.transcribed(coder.id, &coder_transcript());
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(coder.clone()));
     app.refresh(snapshot);
@@ -50,14 +50,18 @@ fn an_open_session_that_ends_says_so_and_offers_the_session_its_item_goes_on_in(
     app.refresh(coder_stopped(Some(next.clone())));
     let offered = screen(&mut app, 90, 16);
     assert!(
-        offered.contains("its item goes on in coder · work · 1m ◆"),
+        offered.contains(&format!(
+            "its item goes on in ◆ coder/{} · 1m",
+            HashId::short(&next.id)
+        )),
         "{offered}"
     );
     assert!(offered.contains("n next session"), "{offered}");
     press(&mut app, KeyCode::Char('n'));
     assert_eq!(app.wanted().detail, Some(Detail::Session(next.id)));
-    // In place of the one that ended: esc goes back to the list.
-    assert_eq!(app.stack().len(), 1);
+    // In place of the one that ended: esc goes back to the item.
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(coder.item)));
 }
 
 #[test]
@@ -89,8 +93,10 @@ fn a_click_on_the_next_session_beside_the_list_opens_it_while_the_list_has_the_k
     for _ in 0..3 {
         press(&mut app, KeyCode::Char('j'));
     }
-    press(&mut app, KeyCode::Enter);
-    press(&mut app, KeyCode::Esc);
+    open_through_item(&mut app, coder.id);
+    // The keys back to the list, with the item and its session kept beside it.
+    press(&mut app, KeyCode::Char('H'));
+    press(&mut app, KeyCode::Char('L'));
     // The ended session keeps its row, so the selection stays on it and the detail beside it.
     let next = next_session();
     let mut snapshot = coder_stopped(Some(next.clone()));
@@ -110,7 +116,7 @@ fn a_click_on_the_next_session_beside_the_list_opens_it_while_the_list_has_the_k
 fn a_live_session_offers_no_next_one() {
     let mut app = app();
     let coder = app.snapshot.working[0].clone();
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(coder.clone()));
     app.refresh(snapshot);
@@ -124,27 +130,29 @@ fn a_session_kept_beside_the_list_gives_way_when_its_row_is_gone() {
     app.resize(130, 24);
     let coder = app.snapshot.working[0].clone();
     let reviewer = SessionId::from_bytes([13; 32]);
+    let archive = app.snapshot.working[2].item;
     // The coder's row, under the three that wait: opened, then the keys back to the list.
     for _ in 0..3 {
         press(&mut app, KeyCode::Char('j'));
     }
     assert_eq!(app.now.selection.get(), Some(&NowRow::Session(coder.id)));
-    press(&mut app, KeyCode::Enter);
-    press(&mut app, KeyCode::Esc);
+    open_through_item(&mut app, coder.id);
+    press(&mut app, KeyCode::Char('H'));
+    press(&mut app, KeyCode::Char('L'));
     assert!(app.list_has_keys());
     assert!(!app.stack().is_empty());
     app.refresh(coder_stopped(None));
     // The selection moved to the row now where the coder's was, and its detail is beside it.
     assert_eq!(app.now.selection.get(), Some(&NowRow::Session(reviewer)));
     assert!(app.stack().is_empty());
-    assert_eq!(app.wanted().detail, Some(Detail::Session(reviewer)));
+    assert_eq!(app.wanted().detail, Some(Detail::Item(archive)));
 }
 
 #[test]
 fn a_session_ended_long_ago_says_so_too() {
     let mut app = app();
     let coder = app.snapshot.working[0].clone();
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(with_status(
         coder,
@@ -228,21 +236,68 @@ fn a_session_that_lost_its_claim_says_so_and_who_has_it() {
         (
             EndReason::LeaseExpired,
             "lease_expired",
-            "■ ended: lease expired · taken over by coder · work · 1m ◆ on vm",
+            "■ ended: lease expired · taken over by ◆ coder/{} · 1m on vm",
         ),
         (
             EndReason::Outclaimed,
             "outclaimed",
-            "■ ended: outclaimed · claimed first by coder · work · 1m ◆ on vm",
+            "■ ended: outclaimed · claimed first by ◆ coder/{} · 1m on vm",
         ),
     ] {
         let mut app = app();
         let coder = app.snapshot.working[0].clone();
         app.transcribed(coder.id, &coder_transcript());
-        press(&mut app, KeyCode::Enter);
+        open_through_item(&mut app, coder.id);
         app.refresh(coder_lost_its_claim(reason));
         let screen = screen(&mut app, 90, 16);
-        assert!(screen.contains(said), "{screen}");
+        let said = said.replace("{}", &HashId::short(&next_session().id));
+        assert!(screen.contains(&said), "{screen}");
         insta::assert_snapshot!(name, screen);
     }
+}
+
+#[test]
+fn the_crumb_of_a_session_names_its_agent_and_session_with_its_age_and_status() {
+    let mut app = app();
+    let coder = app.snapshot.working[0].clone();
+    app.transcribed(coder.id, &coder_transcript());
+    open_through_item(&mut app, coder.id);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(session_in_view(coder.clone()));
+    app.refresh(snapshot);
+    let short = HashId::short(&coder.id);
+    let live = screen(&mut app, 90, 16);
+    assert!(live.contains(&format!("▐◆ coder/{short} · 12m▌")), "{live}");
+    // Ended: a mark by its outcome, the reason at the end.
+    for (reason, crumb) in [
+        (EndReason::Submitted, "✓ coder/{} · 12m · submitted"),
+        (EndReason::Failed, "✗ coder/{} · 12m · failed"),
+        (EndReason::Cancelled, "⊘ coder/{} · 12m · cancelled"),
+    ] {
+        let mut snapshot = coder_stopped(None);
+        snapshot.in_view = Some(session_in_view(with_status(
+            coder.clone(),
+            ended(reason, 0),
+        )));
+        app.refresh(snapshot);
+        let stopped = screen(&mut app, 90, 16);
+        let crumb = crumb.replace("{}", &short);
+        assert!(stopped.contains(&format!("▐{crumb}▌")), "{stopped}");
+    }
+}
+
+#[test]
+fn the_crumb_of_a_parked_session_ends_with_parked() {
+    let mut app = app();
+    let parked = app.snapshot.working[1].clone();
+    open_through_item(&mut app, parked.id);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(session_in_view(parked.clone()));
+    app.refresh(snapshot);
+    let short = HashId::short(&parked.id);
+    let screen = screen(&mut app, 90, 16);
+    assert!(
+        screen.contains(&format!("▐◇ coder/{short} · 40m · parked▌")),
+        "{screen}"
+    );
 }

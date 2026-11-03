@@ -47,12 +47,14 @@ fn the_wheel_moves_what_is_under_the_pointer() {
     let item = Detail::Item(ItemId::from_bytes([4; 32]));
     let blocked = Detail::Item(ItemId::from_bytes([5; 32]));
     // Over the detail beside the list, the wheel scrolls it and leaves the keys with the list.
+    // The coder's permission request is selected, beside it the coder's item.
+    let parse = app.snapshot.working[0].item;
     app.wheel(100, Wheel::Down);
     assert_eq!(
         app.stack(),
         &vec![Opened {
-            detail: Detail::Session(SessionId::from_bytes([11; 32])),
-            scroll: Scroll::END,
+            detail: Detail::Item(parse),
+            scroll: Scroll::At(3),
         }]
     );
     assert!(app.list_has_keys());

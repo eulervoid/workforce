@@ -6,6 +6,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use wf_core::id::HashId;
+use wf_core::session::Outcome;
 
 use super::lists::{age, cut_spans};
 use super::{KeysAt, Themed, accent, ansi_text, highlight_ends, themed};
@@ -190,7 +191,7 @@ pub(super) fn draw_rule(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(rule).themed(theme::divider()), area);
 }
 
-/// Draws where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part
+/// Draws where the detail on screen is: `Now › #k3j1 › ◆ coder/k3j1ab · 12m`. Its last part
 /// has the accent, full while the detail has the keys. Returns the parts that go back to a detail opened before, or to the list.
 pub(super) fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     // Each part, with how many of the details opened it goes back to; `None` for an item named
@@ -309,22 +310,27 @@ pub(super) fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<S
     spots
 }
 
-/// `coder · work · 12m ◆`
+/// `◆ coder/k3j1ab · 12m`, `◇ coder/k3j1ab · 12m · parked` or, ended, `✓ coder/k3j1ab · 12m ·
+/// submitted` with a mark by its outcome: ✓ handed in or finished, ✗ failed, ⊘ neither.
 pub(super) fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
-    let status = match session.status {
-        SessionStatus::Live => themed(" ◆", theme::live()),
-        SessionStatus::Parked => themed(" ◇ parked", theme::live()),
-        SessionStatus::Ended { reason, .. } => Span::raw(format!(" · {}", reason.label())),
-    };
-    vec![
-        Span::raw(format!(
-            "{} · {} · {}",
-            session.agent_name,
-            session.role.name(),
-            age(session.started, app.snapshot.now_ms)
-        )),
-        status,
-    ]
+    let name = Span::raw(format!(
+        "{}/{} · {}",
+        session.agent_name,
+        session.id.short(),
+        age(session.started, app.snapshot.now_ms)
+    ));
+    match session.status {
+        SessionStatus::Live => vec![themed("◆ ", theme::live()), name],
+        SessionStatus::Parked => vec![themed("◇ ", theme::live()), name, Span::raw(" · parked")],
+        SessionStatus::Ended { reason, .. } => {
+            let mark = match reason.outcome() {
+                Outcome::Submitted | Outcome::Finished => themed("✓ ", theme::success()),
+                Outcome::Failed => themed("✗ ", theme::error()),
+                Outcome::Neither => themed("⊘ ", theme::text_dimmed()),
+            };
+            vec![mark, name, Span::raw(format!(" · {}", reason.label()))]
+        }
+    }
 }
 
 /// The latest event, or why the last refresh failed.

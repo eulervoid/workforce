@@ -5,7 +5,6 @@ use super::support::*;
 use crate::dashboard::app::App;
 use crate::dashboard::snapshot::{Detail, Place};
 use jiff::tz::TimeZone;
-use ratatui::crossterm::event::KeyCode;
 use wf_core::identity::DeviceSigner;
 use wf_daemon::proto::TranscriptCopy;
 
@@ -16,7 +15,7 @@ fn coder_on_vm() -> (App, crate::dashboard::snapshot::SessionInfo) {
     let coder = on_vm.working[0].clone();
     let mut app = App::new(on_vm.clone(), TimeZone::UTC);
     app.resize(100, 20);
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     on_vm.in_view = Some(session_in_view(coder.clone()));
     app.refresh(on_vm);
     assert_eq!(app.wanted().detail, Some(Detail::Session(coder.id)));

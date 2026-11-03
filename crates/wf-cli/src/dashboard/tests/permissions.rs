@@ -80,7 +80,7 @@ fn the_answers_under_a_session_and_in_the_footer_are_buttons_too() {
     assert_eq!(app.click(deny, row), permit(Permission::Deny));
     // Under the transcript, above the footer.
     let coder = app.snapshot.working[0].clone();
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);

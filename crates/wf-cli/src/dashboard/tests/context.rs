@@ -35,7 +35,7 @@ fn a_session_detail_shows_its_context_above_the_transcript() {
     let mut app = app();
     with_usage(&mut app);
     let coder = app.snapshot.working[0].clone();
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
@@ -50,8 +50,10 @@ fn a_nearly_full_context_is_yellow_in_the_detail() {
     for _ in 0..4 {
         press(&mut app, KeyCode::Char('j'));
     }
+    let blocked = app.snapshot.working[1].clone();
+    open_through_item(&mut app, blocked.id);
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
+    snapshot.in_view = Some(session_in_view(blocked));
     app.refresh(snapshot);
     insta::assert_snapshot!("detail_context_full", screen(&mut app, 130, 14));
     let line = screen(&mut app, 130, 14)
@@ -73,7 +75,7 @@ fn a_session_detail_names_its_model_before_any_usage() {
     let mut transcript = vec![session_on_opus()];
     transcript.extend(coder_transcript());
     app.transcribed(coder.id, &transcript);
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);

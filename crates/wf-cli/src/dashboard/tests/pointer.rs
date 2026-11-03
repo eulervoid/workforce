@@ -102,17 +102,19 @@ fn the_list_behind_an_open_detail_takes_no_keys() {
     press(&mut app, KeyCode::Right);
     assert_eq!(app.path().len(), 1);
     assert!(!screen(&mut app, 60, 16).contains("coder › coder"));
-    // A session opened from the Now tab goes one further, to the diff of its item, and no
-    // further.
+    // A session opened from the Now tab, through its item, goes one further, to the diff of
+    // its item, and no further.
     press(&mut app, KeyCode::Char('1'));
     app.refresh(snapshot());
-    press(&mut app, KeyCode::Enter);
+    let coder = app.snapshot.working[0].id;
+    open_through_item(&mut app, coder);
     press(&mut app, KeyCode::Right);
     press(&mut app, KeyCode::Right);
     assert!(matches!(
         app.path()[..],
-        [Detail::Session(_), Detail::Diff(_)]
+        [Detail::Item(_), Detail::Session(_), Detail::Diff(_)]
     ));
+    press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.path(), Vec::new());
