@@ -18,15 +18,15 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::lifecycle::Finish;
 use wf_core::name::{AgentName, ReviewStepName};
-use wf_core::session::CommentSnapshot;
+use wf_core::session::{CommentSnapshot, GitOid};
 use wf_harness::Permission;
 use wf_net::frame::{FrameError, blocking as frame};
-use wf_net::{DiffAnswer, WorkAt};
+use wf_net::{ChangesAnswer, DiffAnswer, WorkAt};
 
 use crate::caller::{Caller, Token};
 use crate::founding::Founding;
 
-pub const PROTOCOL_VERSION: u32 = 31;
+pub const PROTOCOL_VERSION: u32 = 32;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -175,6 +175,15 @@ pub enum Call {
     /// up to date while this is called again within some seconds. Answered with a
     /// [`TranscriptCopy`].
     FollowTranscript(SessionId),
+    /// What the snapshot `snapshot` of `session` changed against `against`, the snapshot before it
+    /// or the commit the session started on, as the device of the session has it, for the
+    /// principal; answered with a [`ChangesDiff`].
+    SnapshotChanges {
+        item: ItemId,
+        session: SessionId,
+        against: GitOid,
+        snapshot: GitOid,
+    },
 }
 
 /// What a [`Call::LiveDiff`] came to.
@@ -193,6 +202,15 @@ pub enum LiveDiff {
 pub enum SnapshotDiff {
     /// The device of the session answered, or this one did when the session ran here.
     Answer(DiffAnswer),
+    /// The device of the session could not be asked.
+    Unreachable { device: DeviceKey, reason: String },
+}
+
+/// What a [`Call::SnapshotChanges`] came to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChangesDiff {
+    /// The device of the session answered, or this one did when the session ran here.
+    Answer(ChangesAnswer),
     /// The device of the session could not be asked.
     Unreachable { device: DeviceKey, reason: String },
 }
@@ -329,6 +347,14 @@ mod tests {
                 reason: "timed out".into(),
             },
         ];
+        let changes = vec![
+            ChangesDiff::Answer(ChangesAnswer::Changes("diff --git a/g b/g\n".into())),
+            ChangesDiff::Answer(ChangesAnswer::NotHere),
+            ChangesDiff::Unreachable {
+                device,
+                reason: "timed out".into(),
+            },
+        ];
         let copies = vec![
             TranscriptCopy::Fetching,
             TranscriptCopy::CaughtUp,
@@ -367,6 +393,10 @@ mod tests {
             (
                 "FollowTranscript",
                 encoding::encode(&Reply::Ok(copies)).unwrap(),
+            ),
+            (
+                "SnapshotChanges",
+                encoding::encode(&Reply::Ok(changes)).unwrap(),
             ),
             (
                 "failure",
@@ -420,11 +450,12 @@ mod tests {
             Call::TargetCommit => "TargetCommit",
             Call::AwaitedCommits => "AwaitedCommits",
             Call::FollowTranscript(_) => "FollowTranscript",
+            Call::SnapshotChanges { .. } => "SnapshotChanges",
         }
     }
 
     /// The number of arms of [`golden_name`].
-    const CALL_VARIANTS: usize = 23;
+    const CALL_VARIANTS: usize = 24;
 
     /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
     /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
@@ -504,6 +535,12 @@ mod tests {
             Call::TargetCommit,
             Call::AwaitedCommits,
             Call::FollowTranscript(SessionId::from_bytes([3; 32])),
+            Call::SnapshotChanges {
+                item,
+                session: SessionId::from_bytes([3; 32]),
+                against: "0123456789abcdef0123456789abcdef01234567".parse().unwrap(),
+                snapshot: "89abcdef0123456789abcdef0123456789abcdef".parse().unwrap(),
+            },
         ];
         assert_eq!(
             calls.len(),
@@ -564,7 +601,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_REQUESTS: [(&str, usize, &str); 24] = [
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 25] = [
         (
             "State",
             35,
@@ -681,14 +718,19 @@ mod tests {
             "ji2lzas77zbg7utiivmnfndv52mphfxwv6f32t2oscnq2n7rvuoa",
         ),
         (
+            "SnapshotChanges",
+            143,
+            "ck3y5n6qdmnoufikqewy5upboyaitol4kmgkpi7suyewxqeapega",
+        ),
+        (
             "Found",
             1773,
             "ihsn5ybw6tf7wxfz6dsdvku4woizasnstbxkmep6qbswoigxryvq",
         ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 31;
-    const GOLDEN_REPLIES: [(&str, usize, &str); 10] = [
+    const GOLDEN_PROTOCOL_VERSION: u32 = 32;
+    const GOLDEN_REPLIES: [(&str, usize, &str); 11] = [
         (
             "State",
             20911,
@@ -733,6 +775,11 @@ mod tests {
             "FollowTranscript",
             83,
             "vaxmg5axvomfa554367wzu273glut2jsfeyzofvloduhhfeqt73q",
+        ),
+        (
+            "SnapshotChanges",
+            70,
+            "wubphhgxkxtaaxzfu4vrnnbxdwshssdvh5dgs5sqgaayurfyezaa",
         ),
         (
             "failure",

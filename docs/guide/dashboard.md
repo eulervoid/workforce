@@ -65,12 +65,19 @@ so, and what was fetched before stays on screen.
 
 While an agent works on the item on this machine, the diff follows what it has committed, as the
 daemon copies its commits into wf's repository at the end of every turn. The daemon also keeps a
-snapshot of the agent's files, committed or not, after each of its comments and at the end of each
-turn, in `snapshots/` of the workforce's data, without running anything of the agent's repository's
-own git config. The snapshots stay after the item is merged, as long as its transcripts. Under the
-committed part, the diff shows the uncommitted one: the latest snapshot against the head. Only the
-committed part takes comments on lines: the uncommitted lines are not in any commit to anchor to,
-and `c` and `r` do nothing on them. `p` shows the committed part through git.
+snapshot of the agent's files, committed or not, at the end of each run of tool calls (when the
+agent writes again after them, and after every 50 calls without a word), after each of its comments
+and at the end of each turn, in `snapshots/` of the workforce's data, without running anything of
+the agent's repository's own git config. The snapshots stay after the item is merged, as long as its
+transcripts. Under the committed part, the diff shows the uncommitted one: the latest snapshot
+against the head. Only the committed part takes comments on lines: the uncommitted lines are not in
+any commit to anchor to, and `c` and `r` do nothing on them. `p` shows the committed part through
+git.
+
+In a session's transcript, under each run of tool calls, are the files its snapshot changed against
+the one before, shell commands such as `sed`, formatters or `rm` included, folded to their headers;
+`enter` on them opens their diff in place, read once from the machine the session runs on, and
+closes it again.
 
 The work at a comment shows the files as they were when it was written: `w` on an item picks one of
 its comments that show work, the newest first, and in the item's detail the id of such a comment is a
@@ -262,10 +269,10 @@ wf session stop <session>        # stop it; the item goes back to open
 ```
 
 `wf session watch` renders the agent's markdown, shows thoughts dimmed, and shows tool results,
-plans and diffs. Tool output and diffs are cut at 20 lines a block; `--full` shows everything.
-`--raw` prints plain text without markdown or color, and streams text as it comes instead of a
-paragraph at a time. `--no-follow` prints what is there and stops. `Ctrl-C` stops watching; the
-session goes on.
+plans and diffs, and under each run of tool calls the files it changed. Tool output and diffs are
+cut at 20 lines a block; `--full` shows everything. `--raw` prints plain text without markdown or
+color, and streams text as it comes instead of a paragraph at a time. `--no-follow` prints what is
+there and stops. `Ctrl-C` stops watching; the session goes on.
 
 A session that runs on another of your machines is watched the same way. The daemon fetches its
 transcript from that machine every second while you watch, into a copy beside this machine's own

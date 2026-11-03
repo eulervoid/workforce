@@ -125,7 +125,8 @@ impl Printer {
                 | Block::Log(_)
                 | Block::Plan(_)
                 | Block::Error { .. }
-                | Block::Footer { .. } => self.layout.block(block),
+                | Block::Footer { .. }
+                | Block::Changes { .. } => self.layout.block(block),
             };
             if text.is_empty() {
                 continue;
@@ -429,6 +430,92 @@ mod tests {
             "{output}"
         );
         assert!(!output.contains("+++"));
+    }
+
+    /// The entry of a snapshot `tree`, of `at`, that changed `files` against `against`.
+    fn snapshot(seconds: i64, at: &str, tree: u8, against: u8, files: Value) -> TranscriptEntry {
+        let oid = |byte: u8| format!("{byte:02x}").repeat(20);
+        entry(
+            seconds,
+            Direction::Wf,
+            serde_json::json!({
+                "snapshot": oid(tree), "head": oid(9), "at": at, "left_out": [],
+                "changes": {"against": oid(against), "files": files},
+            }),
+        )
+    }
+
+    #[test]
+    fn a_block_of_calls_shows_the_files_its_snapshot_changed_before_the_text_after_it() {
+        let entries = [
+            update(
+                0,
+                serde_json::json!({"sessionUpdate": "tool_call", "toolCallId": "1", "name": "Bash", "title": "cargo fmt"}),
+            ),
+            update(
+                1,
+                serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "1", "status": "completed"}),
+            ),
+            update(
+                2,
+                serde_json::json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Formatted "}}),
+            ),
+            snapshot(
+                2,
+                "block",
+                2,
+                1,
+                serde_json::json!([
+                    {"path": "src/lib.rs", "change": "modified", "added": 12, "removed": 3},
+                    {"path": "src/old.rs", "change": "deleted", "added": 0, "removed": 40},
+                    {"path": "src/new.rs", "change": {"renamed": {"from": "src/was.rs"}}, "added": 1, "removed": 1},
+                ]),
+            ),
+            update(
+                3,
+                serde_json::json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "it all."}}),
+            ),
+            snapshot(4, "turn_end", 2, 2, serde_json::json!([])),
+        ];
+        let output = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 60),
+            &entries,
+        );
+        insta::assert_snapshot!(output, @r"
+        coder  00:00
+          ✓ Bash  cargo fmt                                     1.0s
+          3 files changed
+            src/lib.rs                                        +12 −3
+            src/old.rs (deleted)                              +0 −40
+            src/new.rs (from src/was.rs)                       +1 −1
+
+          Formatted it all.
+        ");
+    }
+
+    #[test]
+    fn many_changed_files_are_abridged_unless_full() {
+        let files: Vec<Value> = (1..=30)
+            .map(|file| serde_json::json!({"path": format!("gen/{file}.rs"), "change": "added", "added": 1, "removed": 0}))
+            .collect();
+        let entries = [snapshot(0, "block", 2, 1, Value::Array(files))];
+        let abridged = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 60),
+            &entries,
+        );
+        assert!(
+            abridged.contains("gen/5.rs") && abridged.contains("gen/26.rs"),
+            "{abridged}"
+        );
+        assert!(
+            abridged.contains("… 20 files hidden") && !abridged.contains("gen/6.rs"),
+            "{abridged}"
+        );
+        let full = render_all(&mut renderer(Format::Raw, Verbosity::Full, 60), &entries);
+        assert!(
+            full.contains("gen/15.rs") && !full.contains("hidden"),
+            "{full}"
+        );
     }
 
     #[test]

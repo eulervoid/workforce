@@ -16,6 +16,8 @@ pub(crate) const ARGS: [&str; 8] = [
     "--unified=3",
 ];
 
+pub use wf_core::session::{ChangedFile, FileChange};
+
 /// What a diff changes in one file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileDiff {
@@ -23,17 +25,6 @@ pub struct FileDiff {
     pub path: String,
     pub change: FileChange,
     pub content: Content,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FileChange {
-    Added,
-    Deleted,
-    Modified,
-    /// Moved from `from`, maybe changed too.
-    Renamed {
-        from: String,
-    },
 }
 
 /// How a diff shows what changed in a file.
@@ -110,7 +101,17 @@ impl DiffLine {
 }
 
 impl FileDiff {
-    /// How many lines it adds and removes.
+    /// The file as a list of the files of a diff names it: what changed and how many lines.
+    pub fn changed(&self) -> ChangedFile {
+        let (added, removed) = self.counts();
+        ChangedFile {
+            path: self.path.clone(),
+            change: self.change.clone(),
+            added,
+            removed,
+        }
+    }
+
     pub fn counts(&self) -> (usize, usize) {
         let Content::Text(hunks) = &self.content else {
             return (0, 0);

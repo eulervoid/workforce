@@ -307,7 +307,16 @@ async fn turns(
         };
     let cancel = conversation.cancel();
     let mut accepted = conversation.accepted();
+    let mut blocks = conversation.blocks();
     let mut last_head = branch_head(run);
+    if run.role == SessionRole::Work
+        && matches!(run.begin, Begin::New)
+        && let Some(head) = last_head
+    {
+        daemon
+            .record_start(run.workforce, run.item, run.session, head)
+            .await;
+    }
     let mut turns_without_commit = 0;
     let mut imported = None;
     let mut importing = tokio::time::interval(IMPORT_EVERY);
@@ -333,6 +342,9 @@ async fn turns(
                     if let Err(end) = keep_told(daemon, run, record, &told) {
                         return end;
                     }
+                }
+                Ok(()) = blocks.changed() => {
+                    snapshot_block(daemon, loaded, run, &mut imported).await;
                 }
                 // The work so far is copied while the turn goes on, for whoever looks at it.
                 _ = importing.tick() => import_progress(daemon, loaded, run, &mut imported).await,
@@ -397,6 +409,11 @@ async fn turns(
             }
         };
         daemon.faults.harness_answered(&run.harness);
+        // A block that ended right before the turn is a block of its own.
+        if blocks.has_changed().unwrap_or(false) {
+            blocks.mark_unchanged();
+            snapshot_block(daemon, loaded, run, &mut imported).await;
+        }
         import_progress(daemon, loaded, run, &mut imported).await;
         if run.role == SessionRole::Work {
             daemon
@@ -699,6 +716,29 @@ async fn import_progress(
         ),
         Err(error) => tracing::warn!("session {}: {error}", run.session),
     }
+}
+
+/// Takes the snapshot of a work session at the end of a block of tool calls, after copying its
+/// commits, as at the end of a turn.
+async fn snapshot_block(
+    daemon: &Arc<Daemon>,
+    loaded: &Arc<Loaded>,
+    run: &Run,
+    imported: &mut Option<CommitId>,
+) {
+    if run.role != SessionRole::Work {
+        return;
+    }
+    import_progress(daemon, loaded, run, imported).await;
+    daemon
+        .snapshot_work(
+            run.workforce,
+            loaded,
+            run.item,
+            run.session,
+            SnapshotPoint::Block,
+        )
+        .await;
 }
 
 /// The head of the branch of the item in the agent's own repository.

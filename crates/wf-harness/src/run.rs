@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
@@ -263,6 +263,35 @@ fn works_on_the_turn(update: &SessionUpdate) -> bool {
     )
 }
 
+/// Whether `update` ends a block of tool calls, counting them in `calls`: the first message chunk
+/// after one or more of them, or the [`BLOCK_CALLS`]th of them without text between.
+fn ends_a_block(update: &SessionUpdate, calls: &AtomicU64) -> bool {
+    match update {
+        SessionUpdate::ToolCall(_) => {
+            let made = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if made < BLOCK_CALLS {
+                return false;
+            }
+            calls.store(0, Ordering::SeqCst);
+            true
+        }
+        SessionUpdate::AgentMessageChunk(_) => calls.swap(0, Ordering::SeqCst) > 0,
+        SessionUpdate::UserMessageChunk(_)
+        | SessionUpdate::AgentThoughtChunk(_)
+        | SessionUpdate::ToolCallUpdate(_)
+        | SessionUpdate::Plan(_)
+        | SessionUpdate::AvailableCommandsUpdate(_)
+        | SessionUpdate::CurrentModeUpdate(_)
+        | SessionUpdate::ConfigOptionUpdate(_)
+        | SessionUpdate::SessionInfoUpdate(_)
+        | SessionUpdate::UsageUpdate(_)
+        | SessionUpdate::Notice(_)
+        | SessionUpdate::CompactionUpdate(_)
+        | SessionUpdate::CompactionSummaryChunk(_)
+        | _ => false,
+    }
+}
+
 /// Closes every descriptor above stderr, then runs its arguments in its place.
 const CLOSE_INHERITED: &str = r#"for path in /dev/fd/*; do
     descriptor=${path##*/}
@@ -356,6 +385,9 @@ const CLOSE_GRACE: Duration = Duration::from_secs(10);
 /// How often a turn checks how long the agent has been silent.
 const SILENCE_CHECK: Duration = Duration::from_secs(1);
 
+/// How many tool calls without text between them end a block, as text after them does.
+pub const BLOCK_CALLS: u64 = 50;
+
 /// The task that talks to the agent. Aborting it drops the agent's process, which kills its
 /// process group, so a conversation that is dropped, or a start that is given up, leaves nothing
 /// running.
@@ -382,6 +414,8 @@ pub struct Conversation {
     cancel: Arc<watch::Sender<u64>>,
     /// Counts the turns the agent accepted, as [`Conversation::accepted`] tells them.
     accepted: Arc<watch::Sender<u64>>,
+    /// Counts the blocks of tool calls that ended, as [`Conversation::blocks`] tells them.
+    blocks: Arc<watch::Sender<u64>>,
     task: AgentTask,
 }
 
@@ -443,6 +477,12 @@ impl Conversation {
         let accepted = Arc::new(accepted);
         let acceptor = Arc::clone(&accepted);
         let answer_acceptor = Arc::clone(&accepted);
+        // The tool calls of the turn that runs since the agent last wrote text.
+        let calls = Arc::new(AtomicU64::new(0));
+        let calling = Arc::clone(&calls);
+        let (blocks, _) = watch::channel(0u64);
+        let blocks = Arc::new(blocks);
+        let block_ender = Arc::clone(&blocks);
 
         let task = tokio::spawn(async move {
             let outcome = Client
@@ -454,6 +494,11 @@ impl Conversation {
                             && accepting.swap(false, Ordering::SeqCst)
                         {
                             acceptor.send_modify(|turns| *turns += 1);
+                        }
+                        if !unheard.load(Ordering::SeqCst)
+                            && ends_a_block(&notification.update, &calling)
+                        {
+                            block_ender.send_modify(|blocks| *blocks += 1);
                         }
                         if let SessionUpdate::AgentMessageChunk(chunk) = notification.update
                             && let ContentBlock::Text(text) = chunk.content
@@ -586,6 +631,7 @@ impl Conversation {
                         said.lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .clear();
+                        calls.store(0, Ordering::SeqCst);
                         *heard_at
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
@@ -662,6 +708,7 @@ impl Conversation {
                 turns,
                 cancel,
                 accepted,
+                blocks,
                 task,
             }),
             Err(_) => {
@@ -717,6 +764,12 @@ impl Conversation {
     /// may never read it.
     pub fn accepted(&self) -> watch::Receiver<u64> {
         self.accepted.subscribe()
+    }
+
+    /// Counts the blocks of tool calls that ended in the turns so far: the agent wrote text again
+    /// after one or more tool calls, or made [`BLOCK_CALLS`] without text between them.
+    pub fn blocks(&self) -> watch::Receiver<u64> {
+        self.blocks.subscribe()
     }
 
     /// Stops the agent and waits until it is gone, at most [`CLOSE_GRACE`]; an agent that takes

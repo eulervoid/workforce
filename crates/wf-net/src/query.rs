@@ -1,5 +1,6 @@
-//! `wf/query/2`: ask the device a session runs on about it: what its agent is changing, what it
-//! had changed when a comment was written, and what its transcript says.
+//! `wf/query/3`: ask the device a session runs on about it: what its agent is changing, what it
+//! had changed when a comment was written or a block of tool calls ended, and what its transcript
+//! says.
 //!
 //! The initiator sends one [`Query`] and the responder answers with one answer of the type the
 //! request names ([`QueryRequest::Answer`]). A live diff and a transcript are local data nobody
@@ -19,7 +20,7 @@ use crate::frame::{FrameError, MAX_FRAME_LEN, read_frame_within, write_frame_wit
 use crate::node::SourceError;
 use crate::sync::IDLE_TIMEOUT;
 
-pub const QUERY_ALPN: &[u8] = b"wf/query/2";
+pub const QUERY_ALPN: &[u8] = b"wf/query/3";
 
 /// A request is a few ids; a peer that sends more is not speaking the protocol.
 const REQUEST_FRAME_LEN: u32 = 1024;
@@ -39,6 +40,7 @@ pub const TRANSCRIPT_PART_LEN: usize = 1024 * 1024;
 pub enum Query {
     Diff(DiffRequest),
     Snapshot(SnapshotRequest),
+    Changes(ChangesRequest),
     Transcript(TranscriptRequest),
 }
 
@@ -61,6 +63,18 @@ pub struct SnapshotRequest {
     pub at: CommentSnapshot,
 }
 
+/// What the snapshot `snapshot` of `session` changed against `against`, the snapshot before it or
+/// the commit the session started on, as the session's transcript records it; answered with a
+/// [`ChangesAnswer`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangesRequest {
+    pub workforce: WorkforceId,
+    pub item: ItemId,
+    pub session: SessionId,
+    pub against: GitOid,
+    pub snapshot: GitOid,
+}
+
 /// The transcript of a session of the answering device, from byte `from` on: the asker keeps a
 /// copy and asks for what follows its end.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +84,7 @@ pub struct TranscriptRequest {
     pub from: u64,
 }
 
-/// A request of `wf/query/2` and the answer it gets.
+/// A request of `wf/query/3` and the answer it gets.
 pub trait QueryRequest: Clone + Into<Query> {
     type Answer: DeserializeOwned;
 }
@@ -84,6 +98,12 @@ impl From<DiffRequest> for Query {
 impl From<SnapshotRequest> for Query {
     fn from(request: SnapshotRequest) -> Self {
         Self::Snapshot(request)
+    }
+}
+
+impl From<ChangesRequest> for Query {
+    fn from(request: ChangesRequest) -> Self {
+        Self::Changes(request)
     }
 }
 
@@ -101,6 +121,10 @@ impl QueryRequest for SnapshotRequest {
     type Answer = DiffAnswer;
 }
 
+impl QueryRequest for ChangesRequest {
+    type Answer = ChangesAnswer;
+}
+
 impl QueryRequest for TranscriptRequest {
     type Answer = TranscriptAnswer;
 }
@@ -110,6 +134,7 @@ impl Query {
         match self {
             Self::Diff(request) => request.workforce,
             Self::Snapshot(request) => request.workforce,
+            Self::Changes(request) => request.workforce,
             Self::Transcript(request) => request.workforce,
         }
     }
@@ -123,6 +148,17 @@ pub enum DiffAnswer {
     /// This device has no branch or agent repository of the item, or not the snapshot asked for.
     NotHere,
     /// The work is larger than the largest answer; the asker sees it is not a broken connection.
+    TooLarge,
+}
+
+/// What a snapshot changed against the one before it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChangesAnswer {
+    /// The diff, as git prints it.
+    Changes(String),
+    /// This device has no such snapshot of the session in its transcript.
+    NotHere,
+    /// The diff is larger than the largest answer.
     TooLarge,
 }
 
@@ -228,6 +264,13 @@ pub trait QuerySource: Send + Sync {
         at: CommentSnapshot,
     ) -> n0_future::boxed::BoxFuture<Result<DiffAnswer, SourceError>>;
 
+    /// The answer to a request for what the snapshot `snapshot` of `session` on `item` changed
+    /// against `against`: [`ChangesAnswer::NotHere`] when its transcript records no such snapshot.
+    fn changes(
+        &self,
+        request: ChangesRequest,
+    ) -> n0_future::boxed::BoxFuture<Result<ChangesAnswer, SourceError>>;
+
     /// The answer to a request for the transcript of `session` from byte `from`, of at most
     /// `limit` bytes ([`TranscriptAnswer::read`]); [`TranscriptAnswer::NotHere`] when the session
     /// is not one of this device.
@@ -317,6 +360,15 @@ where
                 .await
                 .map_err(QueryError::Source)?;
             write_diff_answer(&mut stream, &answer, idle).await
+        }
+        Query::Changes(request) => {
+            let answer = source.changes(request).await.map_err(QueryError::Source)?;
+            match write_frame_within(&mut stream, &answer, idle).await {
+                Err(FrameError::TooLarge(_)) => {
+                    Ok(write_frame_within(&mut stream, &ChangesAnswer::TooLarge, idle).await?)
+                }
+                written => Ok(written?),
+            }
         }
         Query::Transcript(TranscriptRequest {
             workforce,

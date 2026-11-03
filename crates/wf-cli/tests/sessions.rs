@@ -1074,6 +1074,150 @@ wf work release --note \"stopping\"
     }
 }
 
+/// The snapshot entries in the one transcript of `world`.
+fn recorded_snapshots(world: &World) -> Vec<Value> {
+    let workforce_directory = world.bare().parent().unwrap().to_path_buf();
+    let transcripts: Vec<PathBuf> = std::fs::read_dir(workforce_directory.join("transcripts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .collect();
+    let [transcript] = transcripts.as_slice() else {
+        panic!("one transcript: {transcripts:?}");
+    };
+    std::fs::read_to_string(transcript)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|entry| entry["direction"] == "wf" && entry["message"]["snapshot"].is_string())
+        .map(|entry| entry["message"].clone())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_transcript_records_a_snapshot_at_the_end_of_each_block_of_tool_calls_that_changed_the_files()
+ {
+    // The agent goes on once the snapshot of a block is recorded, as an agent that writes on for a
+    // while after its calls.
+    let blocks = |count: usize| {
+        format!(
+            "sh until [ $(cat \"$WF_DATA_DIR\"/*/transcripts/*.jsonl | grep -c '\"at\":\"block\"') -ge {count} ]; do sleep 0.05; done"
+        )
+    };
+    let script = format!(
+        "\
+sh echo one > notes.txt && echo kept > kept.txt && git add . && git commit -q -m notes
+tool Run sed
+sh sed -i.bak s/one/two/ notes.txt && rm notes.txt.bak
+say Changed it.
+{}
+say Still the same message.
+tool Read notes.txt
+say Read it.
+tool Run rm
+sh rm notes.txt
+say Removed it.
+{}
+say That is all.
+turn
+wf work release --note \"stopping\"
+",
+        blocks(1),
+        blocks(2)
+    );
+    let world = World::new(&script).await;
+    let item = world.wf.add(&["--title", "Edit through the shell"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+
+    let snapshots = recorded_snapshots(&world);
+    assert_eq!(
+        snapshots
+            .iter()
+            .map(|snapshot| snapshot["at"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["block", "block"],
+        "the block that only read and the turn end after the last block record none: \
+         {snapshots:?}"
+    );
+    let workforce_directory = world.bare().parent().unwrap().to_path_buf();
+    let snapshot_repository = workforce_directory.join("snapshots").join(&item[..12]);
+    let files = |snapshot: &Value| {
+        let tree = snapshot["snapshot"].as_str().unwrap();
+        git_in(&snapshot_repository, &["ls-tree", "--name-only", tree])
+    };
+    let notes = |snapshot: &Value| {
+        let tree = snapshot["snapshot"].as_str().unwrap();
+        git_in(
+            &snapshot_repository,
+            &["cat-file", "blob", &format!("{tree}:notes.txt")],
+        )
+    };
+    assert_eq!(notes(&snapshots[0]), "two", "what sed changed");
+    assert!(files(&snapshots[0]).lines().any(|file| file == "notes.txt"));
+    assert!(
+        !files(&snapshots[1]).lines().any(|file| file == "notes.txt"),
+        "what rm deleted"
+    );
+    // The first block changed the files against where the branch started, before the commit
+    // made in it; the second against the first.
+    assert_eq!(
+        snapshots[0]["changes"]["files"],
+        serde_json::json!([
+            {"path": "kept.txt", "change": "added", "added": 1, "removed": 0},
+            {"path": "notes.txt", "change": "added", "added": 1, "removed": 0},
+        ])
+    );
+    assert_eq!(
+        snapshots[1]["changes"],
+        serde_json::json!({
+            "against": snapshots[0]["snapshot"],
+            "files": [{"path": "notes.txt", "change": "deleted", "added": 0, "removed": 1}],
+        })
+    );
+    let watched = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    let changed = |files: &str| {
+        watched
+            .find(files)
+            .unwrap_or_else(|| panic!("{files} in {watched}"))
+    };
+    assert!(
+        changed("2 files changed") < changed("Changed it.")
+            && changed("Changed it.") < changed("1 file changed")
+            && changed("1 file changed") < changed("Removed it."),
+        "each block's files before the text after it: {watched}"
+    );
+    assert!(watched.contains("notes.txt (deleted)"), "{watched}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fifty_tool_calls_without_text_end_a_block() {
+    let calls = "tool Run\n".repeat(49);
+    let script = format!(
+        "sh echo one > notes.txt\n{calls}sh echo two > notes.txt\ntool Run\nturn\nwf work release --note \"stopping\"\n"
+    );
+    let world = World::new(&script).await;
+    let item = world.wf.add(&["--title", "Call tools without a word"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+
+    let snapshots = recorded_snapshots(&world);
+    assert_eq!(
+        snapshots
+            .iter()
+            .map(|snapshot| snapshot["at"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["block"],
+        "the fiftieth call ends the block, and the turn end after it changed nothing: \
+         {snapshots:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_snapshots_of_an_item_stay_after_its_agent_repository_is_removed_on_the_merge() {
     let script = "\

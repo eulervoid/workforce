@@ -1,6 +1,6 @@
 //! The transcripts of sessions on other devices.
 //!
-//! The device of a session answers for its transcript over `wf/query/2`. While the principal
+//! The device of a session answers for its transcript over `wf/query/3`. While the principal
 //! follows a session of another device, the daemon asks that device for what is new and appends it
 //! to a copy, which the CLI reads as it reads the transcripts of this device. A copy is a cache: it
 //! is kept apart from the transcripts of this device, and once removed it is fetched again from

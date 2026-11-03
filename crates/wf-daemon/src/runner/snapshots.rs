@@ -7,7 +7,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use wf_core::event::{Event, EventBody};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
-use wf_core::session::{CommentSnapshot, CommitId, GitOid, SessionRole};
+use wf_core::session::{CommentSnapshot, CommitId, GitOid, SessionRole, SnapshotChanges};
 use wf_harness::{Direction, TranscriptEntry};
 use wf_vcs::{GitCli, Snapshot};
 
@@ -18,21 +18,28 @@ use crate::{Daemon, Loaded};
 /// Where in a work session a snapshot is taken.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum SnapshotPoint {
+    /// When a block of tool calls ended: the agent wrote text again after them, or made
+    /// [`wf_harness::BLOCK_CALLS`] of them without text.
+    Block,
     /// After the import of a comment by the session on its item.
     Comment(CommentId),
     /// At the end of a turn, which is also where a session parks.
     TurnEnd,
 }
 
-/// `{"snapshot": <tree>, "head": <commit>?, "base": <commit>?, "at": "comment" | "turn_end",
-/// "comment": <id>?, "left_out": [...]}`, written by wf. `head` is where the item's branch was,
-/// which the uncommitted part of the snapshot is against; `base` is where it left the target then,
-/// which the committed part is against, also once the item is merged.
+/// `{"snapshot": <tree>, "head": <commit>?, "base": <commit>?, "at": "block" | "comment" | "turn_end",
+/// "comment": <id>?, "left_out": [...], "changes": {"against": <tree or commit>, "files": [...]}?}`,
+/// written by wf. `head` is where the item's branch was, which the uncommitted part of the snapshot
+/// is against; `base` is where it left the target then, which the committed part is against, also
+/// once the item is merged. `changes` are the files it changed against the session's snapshot
+/// before it, which the transcript shows; `None` for a first snapshot of a session that did not
+/// keep where it started.
 fn snapshot_entry(
     at: Timestamp,
     snapshot: &Snapshot,
     head: Option<CommitId>,
     base: Option<CommitId>,
+    changes: Option<&SnapshotChanges>,
     point: SnapshotPoint,
 ) -> TranscriptEntry {
     let mut message = serde_json::json!({
@@ -41,11 +48,15 @@ fn snapshot_entry(
         "base": base.map(|base| base.to_string()),
         "left_out": snapshot.left_out,
     });
+    if let Some(changes) = changes {
+        message["changes"] = serde_json::json!(changes);
+    }
     match point {
         SnapshotPoint::Comment(comment) => {
             message["at"] = "comment".into();
             message["comment"] = comment.to_base32().into();
         }
+        SnapshotPoint::Block => message["at"] = "block".into(),
         SnapshotPoint::TurnEnd => message["at"] = "turn_end".into(),
     }
     TranscriptEntry {
@@ -94,6 +105,19 @@ pub(crate) fn find_snapshot(transcript: &str, at: CommentSnapshot) -> Option<Rec
     }
 }
 
+/// Whether `transcript`, the lines of the transcript of a session, records the snapshot `tree`
+/// with what it changed against `against`.
+pub(crate) fn records_changes(transcript: &str, against: GitOid, tree: GitOid) -> bool {
+    transcript
+        .lines()
+        .filter_map(|line| serde_json::from_str::<TranscriptEntry>(line).ok())
+        .filter(|entry| recorded(entry).is_some_and(|snapshot| snapshot.tree == tree))
+        .any(|entry| {
+            serde_json::from_value::<SnapshotChanges>(entry.message["changes"].clone())
+                .is_ok_and(|changes| changes.against == against)
+        })
+}
+
 /// The snapshot `entry` records, when it is a snapshot entry.
 fn recorded(entry: &TranscriptEntry) -> Option<RecordedSnapshot> {
     match entry.direction {
@@ -120,6 +144,32 @@ fn is_prompt(entry: &TranscriptEntry) -> bool {
         Direction::ToAgent => entry.message["method"] == "session/prompt",
         Direction::FromAgent | Direction::AgentLog | Direction::Wf => false,
     }
+}
+
+/// What `snapshot` of `session` changed against its snapshot before, or for its first against the
+/// commit the session started on; `None` when it did not keep that.
+fn changes(
+    workforce_directory: &Path,
+    item: ItemId,
+    session: SessionId,
+    snapshot: &Snapshot,
+) -> Result<Option<SnapshotChanges>, wf_vcs::VcsError> {
+    let against = match snapshot.previous {
+        Some(previous) => Some(previous),
+        None => wf_vcs::started_on(workforce_directory, item, session)?
+            .map(|CommitId::Git(commit)| commit),
+    };
+    let Some(against) = against else {
+        return Ok(None);
+    };
+    let diff = wf_vcs::snapshot_changes(workforce_directory, item, against, snapshot.tree)?;
+    Ok(Some(SnapshotChanges {
+        against,
+        files: wf_vcs::diff::parse(&diff)
+            .iter()
+            .map(wf_vcs::diff::FileDiff::changed)
+            .collect(),
+    }))
 }
 
 /// Appends `entry` to the transcript at `path` in one write, beside the harness, which appends
@@ -157,8 +207,8 @@ impl Daemon {
             let unchanged = snapshot.previous == Some(snapshot.tree);
             match point {
                 SnapshotPoint::Comment(_) => {}
-                SnapshotPoint::TurnEnd if unchanged => return Ok(()),
-                SnapshotPoint::TurnEnd => {}
+                SnapshotPoint::Block | SnapshotPoint::TurnEnd if unchanged => return Ok(()),
+                SnapshotPoint::Block | SnapshotPoint::TurnEnd => {}
             }
             // The import before the snapshot moved the branch to what the agent committed.
             let git = GitCli::open(&wf_vcs::bare_repository(&workforce_directory)).ok();
@@ -173,11 +223,18 @@ impl Daemon {
                     .flatten(),
                 _ => None,
             };
-            append(
-                &transcript,
-                &snapshot_entry(Timestamp::now(), &snapshot, head, base, point),
-            )
-            .map_err(|error| format!("cannot write {}: {error}", transcript.display()))?;
+            let changes = changes(&workforce_directory, item, session, &snapshot)
+                .map_err(|error| wf_core::error_chain(&error))?;
+            let entry = snapshot_entry(
+                Timestamp::now(),
+                &snapshot,
+                head,
+                base,
+                changes.as_ref(),
+                point,
+            );
+            append(&transcript, &entry)
+                .map_err(|error| format!("cannot write {}: {error}", transcript.display()))?;
             // Only a snapshot in the transcript is the previous one of the next, so that one not
             // written is taken again.
             wf_vcs::record_snapshot(&workforce_directory, item, session, snapshot.tree)
@@ -189,6 +246,30 @@ impl Daemon {
             Ok(Err(error)) => tracing::warn!(
                 "session {}: could not take a snapshot of the work: {error}",
                 session.short()
+            ),
+            Err(error) => tracing::warn!("session {}: {error}", session.short()),
+        }
+    }
+
+    /// Keeps `head`, where the branch was when the work session `session` started, for what its
+    /// first snapshot changed to be against. One that fails is only logged: the transcript then
+    /// shows no changes under the first snapshot.
+    pub(super) async fn record_start(
+        &self,
+        workforce: WorkforceId,
+        item: ItemId,
+        session: SessionId,
+        head: CommitId,
+    ) {
+        let workforce_directory = self.workforce_directory(workforce);
+        let recorded =
+            blocking(move || wf_vcs::record_start(&workforce_directory, item, session, head)).await;
+        match recorded {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(
+                "session {}: could not keep where its branch started: {}",
+                session.short(),
+                wf_core::error_chain(&error)
             ),
             Err(error) => tracing::warn!("session {}: {error}", session.short()),
         }
@@ -244,7 +325,7 @@ mod tests {
         };
         let head = Some(CommitId::Git(tree(byte + 100)));
         let base = Some(CommitId::Git(tree(byte + 200)));
-        snapshot_entry(Timestamp::UNIX_EPOCH, &snapshot, head, base, point)
+        snapshot_entry(Timestamp::UNIX_EPOCH, &snapshot, head, base, None, point)
     }
 
     fn to_agent(message: serde_json::Value) -> TranscriptEntry {

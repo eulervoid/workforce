@@ -10,7 +10,7 @@ pub use permission::{
     Decider, Decision, MissingOption, Permission, PermissionRequest, Permissions,
 };
 pub use run::{
-    AgentSessionId, CancelHandle, Conversation, Error, KnownHarness, Launch, Model, Opening,
-    StopReason, UsageLimit, models,
+    AgentSessionId, BLOCK_CALLS, CancelHandle, Conversation, Error, KnownHarness, Launch, Model,
+    Opening, StopReason, UsageLimit, models,
 };
 pub use transcript::{Direction, TranscriptEntry};

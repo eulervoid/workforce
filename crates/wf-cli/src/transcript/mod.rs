@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use jiff::{SignedDuration, Timestamp};
 use serde::Deserialize;
 use serde_json::Value;
+use wf_core::session::{ChangedFile, GitOid, SnapshotChanges};
 use wf_harness::{Decision, Direction, Permission, TranscriptEntry};
 
 pub use file::Reader;
@@ -172,6 +173,14 @@ pub enum Block {
         reason: StopReason,
         elapsed: Option<SignedDuration>,
     },
+    /// The files a snapshot of the work changed against the session's snapshot before it, at the
+    /// end of a block of tool calls, a comment or a turn (SPEC §10). Only the device of the
+    /// session has their diff, `snapshot` against `against`.
+    Changes {
+        snapshot: GitOid,
+        against: GitOid,
+        files: Vec<ChangedFile>,
+    },
 }
 
 enum Turn {
@@ -312,6 +321,8 @@ impl Transcript {
                 if let Ok(decision) = serde_json::from_value(message["decision"].clone()) {
                     let call = message["toolCallId"].as_str().unwrap_or("?");
                     self.decided(entry.at, call, decision);
+                } else if let Some(snapshot) = message["snapshot"].as_str() {
+                    self.snapshot(snapshot, &message["changes"]);
                 }
             }
             Direction::FromAgent => match method {
@@ -416,6 +427,24 @@ impl Transcript {
             self.open_prose_with(kind, message, at);
             self.prose.as_mut().expect("it was just opened").text = tail;
         }
+    }
+
+    /// A snapshot of the work, with what it changed. It comes once the agent writes again after
+    /// its calls, so it goes before the paragraph being written, which is not a block yet, and
+    /// leaves it open; one that changed nothing shows nothing.
+    fn snapshot(&mut self, snapshot: &str, changes: &Value) {
+        let (Ok(snapshot), Ok(changes)) = (snapshot.parse(), SnapshotChanges::deserialize(changes))
+        else {
+            return;
+        };
+        if changes.files.is_empty() {
+            return;
+        }
+        self.blocks.push(Block::Changes {
+            snapshot,
+            against: changes.against,
+            files: changes.files,
+        });
     }
 
     /// wf decided the permission request for the call `call_id`, right before answering it. A

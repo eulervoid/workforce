@@ -20,8 +20,9 @@ use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::{LogError, SyncLog};
 use crate::query::{
-    self, DiffAnswer, DiffRequest, QUERY_ALPN, QueryError, QueryRequest, QuerySource,
-    SnapshotRequest, TranscriptAnswer, TranscriptRequest, WorkAt, read_query,
+    self, ChangesAnswer, ChangesRequest, DiffAnswer, DiffRequest, QUERY_ALPN, QueryError,
+    QueryRequest, QuerySource, SnapshotRequest, TranscriptAnswer, TranscriptRequest, WorkAt,
+    read_query,
 };
 use crate::sync::{IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
@@ -668,6 +669,15 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             item,
             at,
         };
+        self.query(peer, &request).await
+    }
+
+    /// Asks a device what a snapshot of one of its sessions changed against the one before.
+    pub async fn query_changes(
+        &self,
+        peer: impl Into<EndpointAddr>,
+        request: ChangesRequest,
+    ) -> Result<ChangesAnswer, NetError> {
         self.query(peer, &request).await
     }
 

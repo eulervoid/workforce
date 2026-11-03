@@ -147,6 +147,7 @@ fn event_loop(
     feed.read_transcripts(workspace, &mut app);
     feed.read_diff(workspace, &mut app);
     feed.read_work_at(workspace, &mut app);
+    feed.read_changes(workspace, &mut app);
     if let Some(snapshot) = feed.snapshot(workspace, &mut app)? {
         app.refresh(snapshot);
     }
@@ -195,6 +196,7 @@ fn event_loop(
                 feed.read_transcripts(workspace, &mut app);
                 feed.read_diff(workspace, &mut app);
                 feed.read_work_at(workspace, &mut app);
+                feed.read_changes(workspace, &mut app);
                 match feed.in_view(workspace, &app) {
                     Ok(in_view) => app.refresh_detail(in_view),
                     Err(error) => app.refresh_failed(&error),
@@ -206,6 +208,7 @@ fn event_loop(
         feed.read_transcripts(workspace, &mut app);
         feed.read_diff(workspace, &mut app);
         feed.read_work_at(workspace, &mut app);
+        feed.read_changes(workspace, &mut app);
         match feed.snapshot(workspace, &mut app)? {
             Some(snapshot) => app.refresh(snapshot),
             None => app.tick(wf_store::now_ms()),
@@ -630,6 +633,25 @@ impl Feed {
                 }
                 Err(error) => app.transcript_failed(&error),
             }
+        }
+    }
+
+    /// Hands the transcript on screen the diffs of the changed files opened in it, asked of the
+    /// device of its session once when each is opened, or why they cannot be read.
+    fn read_changes(&mut self, workspace: &Workspace, app: &mut App) {
+        let Some(Detail::Session(session)) = app.wanted().detail else {
+            return;
+        };
+        let (Some(lines), Some(transcript)) = (
+            app.transcript_lines.get_mut(&session),
+            app.transcripts.get(&session),
+        ) else {
+            return;
+        };
+        for (block, snapshot, against) in lines.unread_changes(transcript) {
+            let read = commands::snapshot_changes(workspace, session, against, snapshot)
+                .map_err(|error| format!("{error:#}"));
+            lines.read_changes(block, read, transcript);
         }
     }
 
