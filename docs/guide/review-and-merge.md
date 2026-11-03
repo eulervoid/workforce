@@ -69,13 +69,23 @@ still checks out the work itself. While the branch has no commits ahead of the t
 agent has not made any commits; with `--json`, `committed` is then `null`, where commits that change nothing
 give an empty one.
 
-While an agent works on the item on this machine, the diff shows what it has committed so far:
-the daemon copies the agent's commits into wf's repository at the end of every turn. What the
-agent has not committed shows nowhere, as wf does not run git in the agent's repository. Only
+While an agent works on the item, the diff shows what it has committed so far: the daemon copies
+the agent's commits into wf's repository at the end of every turn. Under it, headed `uncommitted,
+against <head>`, comes what the agent has not committed, as the daemon's latest snapshot of its
+files shows it (taken at each of its comments and turn ends; `uncommitted` with `--json`). Only
 commits carry over to a later session and are what review and merge see.
 
+```sh
+wf item diff k3f7 --at 5mq2      # the work when comment 5mq2 was written, committed and uncommitted apart
+```
+
+`--at` shows the work at a comment: for a comment by the agent's work session, its files as they
+were when it wrote it; for a comment that resolves a blocker the session parked on, as they were
+when it parked, which is what the one answering saw. The machine the session ran on answers, as for
+the live diff.
+
 When the agent's session runs on another of your machines, `wf item diff` asks that machine through
-the daemon and prints what it has committed, saying which device it came from; `--json` has the
+the daemon and prints what it has committed and its uncommitted part, saying which device it came from; `--json` has the
 device in `device`. Git's own options and pager do not apply to it. A machine that cannot be reached is
 said as such, not as a missing branch; the diff of an item with no running session is read here.
 

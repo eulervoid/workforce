@@ -16,7 +16,9 @@ use wf_daemon::caches::CacheUsage;
 use wf_daemon::caller::Caller;
 use wf_daemon::client::{ClientError, DaemonClient};
 use wf_daemon::data_dir::DataDirError;
-use wf_daemon::proto::{EndAnswer, HeldPermission, LiveDiff, ProtoError, TranscriptCopy};
+use wf_daemon::proto::{
+    EndAnswer, HeldPermission, LiveDiff, ProtoError, SnapshotDiff, TranscriptCopy,
+};
 use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
 
@@ -511,11 +513,11 @@ impl Workspace {
     }
 
     /// The work of `item` as the device of its live session shows it, which the daemon asks for;
-    /// `None` without a daemon. `since` is the head of the answer the caller last had.
+    /// `None` without a daemon. `since` is where the work was in the answer the caller last had.
     pub fn live_diff(
         &self,
         item: ItemId,
-        since: Option<CommitId>,
+        since: Option<wf_net::WorkAt>,
     ) -> anyhow::Result<Option<LiveDiff>> {
         match &self.source {
             Source::Local(..) => Ok(None),
@@ -523,6 +525,23 @@ impl Workspace {
                 self.workforce,
                 item,
                 since,
+            )?)),
+        }
+    }
+
+    /// The work on `item` at the snapshot `at` of a comment, which the daemon asks the device of
+    /// its session for; `None` without a daemon.
+    pub fn snapshot_diff(
+        &self,
+        item: ItemId,
+        at: wf_core::session::CommentSnapshot,
+    ) -> anyhow::Result<Option<SnapshotDiff>> {
+        match &self.source {
+            Source::Local(..) => Ok(None),
+            Source::Daemon { client, .. } => Ok(Some(client.borrow_mut().snapshot_diff(
+                self.workforce,
+                item,
+                at,
             )?)),
         }
     }

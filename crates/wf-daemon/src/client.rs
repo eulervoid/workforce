@@ -260,15 +260,25 @@ impl DaemonClient {
         self.call(workforce, Call::CacheUsage)
     }
 
-    /// The work of an item as the device of its live work session shows it. `since` is the head
-    /// of the answer the caller last had.
+    /// The work of an item as the device of its live work session shows it. `since` is where the
+    /// work was in the answer the caller last had.
     pub fn live_diff(
         &mut self,
         workforce: WorkforceId,
         item: ItemId,
-        since: Option<wf_core::session::CommitId>,
+        since: Option<wf_net::WorkAt>,
     ) -> Result<crate::proto::LiveDiff, ClientError> {
         self.call(workforce, Call::LiveDiff { item, since })
+    }
+
+    /// The work on an item at the snapshot a comment shows, as the device of its session has it.
+    pub fn snapshot_diff(
+        &mut self,
+        workforce: WorkforceId,
+        item: ItemId,
+        at: wf_core::session::CommentSnapshot,
+    ) -> Result<crate::proto::SnapshotDiff, ClientError> {
+        self.call(workforce, Call::SnapshotDiff { item, at })
     }
 
     /// Follows the transcript of a session of another device for some seconds more: what its

@@ -13,7 +13,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use wf_core::id::{ItemId, SessionId, WorkforceId};
 use wf_core::identity::{DeviceKey, DeviceSigner};
 use wf_core::invite::{InviteCode, JoinRefusal};
-use wf_core::session::CommitId;
+use wf_core::session::CommentSnapshot;
 
 use crate::git::{self, GIT_ALPN, GitError, GitRequest, GitSource, read_git_request};
 use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
@@ -21,7 +21,7 @@ use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations
 use crate::log::{LogError, SyncLog};
 use crate::query::{
     self, DiffAnswer, DiffRequest, QUERY_ALPN, QueryError, QueryRequest, QuerySource,
-    TranscriptAnswer, TranscriptRequest, read_query,
+    SnapshotRequest, TranscriptAnswer, TranscriptRequest, WorkAt, read_query,
 };
 use crate::sync::{IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
@@ -645,12 +645,28 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         peer: impl Into<EndpointAddr>,
         workforce: WorkforceId,
         item: ItemId,
-        since: Option<CommitId>,
+        since: Option<WorkAt>,
     ) -> Result<DiffAnswer, NetError> {
         let request = DiffRequest {
             workforce,
             item,
             since,
+        };
+        self.query(peer, &request).await
+    }
+
+    /// Asks a device for the work on an item at a snapshot of one of its sessions.
+    pub async fn query_snapshot(
+        &self,
+        peer: impl Into<EndpointAddr>,
+        workforce: WorkforceId,
+        item: ItemId,
+        at: CommentSnapshot,
+    ) -> Result<DiffAnswer, NetError> {
+        let request = SnapshotRequest {
+            workforce,
+            item,
+            at,
         };
         self.query(peer, &request).await
     }

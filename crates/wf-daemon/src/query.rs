@@ -1,11 +1,11 @@
-//! The answers of this device to `wf/query/1`: the work and the transcripts of its sessions.
+//! The answers of this device to `wf/query/2`: the work and the transcripts of its sessions.
 
 use std::sync::{Arc, Weak};
 
 use n0_future::boxed::BoxFuture;
 use wf_core::id::{ItemId, SessionId, WorkforceId};
-use wf_core::session::CommitId;
-use wf_net::{DiffAnswer, SourceError, TranscriptAnswer};
+use wf_core::session::CommentSnapshot;
+use wf_net::{DiffAnswer, SourceError, TranscriptAnswer, WorkAt};
 
 use crate::Daemon;
 
@@ -13,7 +13,7 @@ use crate::Daemon;
 #[error("the daemon is shutting down")]
 struct Gone;
 
-/// Answers `wf/query/1` from the agent repositories and the transcripts of this machine.
+/// Answers `wf/query/2` from the agent repositories and the transcripts of this machine.
 pub(crate) struct QueryResponder(Weak<Daemon>);
 
 impl QueryResponder {
@@ -27,12 +27,25 @@ impl wf_net::QuerySource for QueryResponder {
         &self,
         workforce: WorkforceId,
         item: ItemId,
-        since: Option<CommitId>,
+        since: Option<WorkAt>,
     ) -> BoxFuture<Result<DiffAnswer, SourceError>> {
         let daemon = self.0.clone();
         Box::pin(async move {
             let daemon = daemon.upgrade().ok_or(Gone)?;
             Ok(daemon.diff_here(workforce, item, since).await?)
+        })
+    }
+
+    fn snapshot(
+        &self,
+        workforce: WorkforceId,
+        item: ItemId,
+        at: CommentSnapshot,
+    ) -> BoxFuture<Result<DiffAnswer, SourceError>> {
+        let daemon = self.0.clone();
+        Box::pin(async move {
+            let daemon = daemon.upgrade().ok_or(Gone)?;
+            Ok(daemon.snapshot_here(workforce, item, at).await?)
         })
     }
 

@@ -57,7 +57,7 @@ numbers before and after.
 While an agent works on another of your machines, the diff is read from that machine: a line above
 it says which device and how long ago it answered. The dashboard asks again every few seconds while
 the diff is on screen, and when the machine cannot be reached it keeps the last diff, with its age and
-the reason. Only what is committed shows from another machine, not what its agent has yet to commit.
+the reason. What its agent has yet to commit shows as its latest snapshot (below) on that machine.
 
 A session's transcript is fetched from its machine the same way, every second while it is on screen.
 The daemon keeps a copy of it. When the machine cannot be reached, a line under the transcript says
@@ -67,9 +67,10 @@ While an agent works on the item on this machine, the diff follows what it has c
 daemon copies its commits into wf's repository at the end of every turn. The daemon also keeps a
 snapshot of the agent's files, committed or not, after each of its comments and at the end of each
 turn, in `snapshots/` of the workforce's data, without running anything of the agent's repository's
-own git config. The snapshots stay after the item is merged, as long as its transcripts. Only the committed part takes comments on
-lines: the uncommitted lines are not in any commit to anchor to, and `c` and `r` do nothing on them.
-`p` shows the committed part through git.
+own git config. The snapshots stay after the item is merged, as long as its transcripts. Under the
+committed part, the diff shows the uncommitted one: the latest snapshot against the head. Only the
+committed part takes comments on lines: the uncommitted lines are not in any commit to anchor to,
+and `c` and `r` do nothing on them. `p` shows the committed part through git.
 
 ### When the daemon restarts
 

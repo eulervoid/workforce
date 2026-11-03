@@ -708,6 +708,11 @@ pub enum ItemCommand {
     Diff {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
+        /// The work at a comment instead, as the device of its session had it: the start of the
+        /// id of a comment by a work session, or of one that resolves a blocker a work session
+        /// parked on.
+        #[arg(long, value_name = "COMMENT")]
+        at: Option<String>,
         /// Passed on to `git diff`, such as `--stat` or `--diff-algorithm patience -- src/`; paths follow `--`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         git_args: Vec<String>,
@@ -1083,6 +1088,24 @@ mod tests {
                 grouped.iter().filter(|other| *other == name).count(),
                 1,
                 "`{name}` twice"
+            );
+        }
+    }
+
+    #[test]
+    fn the_comment_of_a_diff_is_wfs_before_or_after_the_item_and_git_args_follow() {
+        for args in [
+            ["wf", "item", "diff", "--at", "c7", "k3f", "--stat"],
+            ["wf", "item", "diff", "k3f", "--at", "c7", "--stat"],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Some(Command::Item(ItemCommand::Diff { item, at, git_args })) = cli.command else {
+                panic!("wf item diff");
+            };
+            assert_eq!(
+                (item.as_deref(), at.as_deref(), git_args),
+                (Some("k3f"), Some("c7"), vec!["--stat".to_string()]),
+                "{args:?}"
             );
         }
     }

@@ -1003,6 +1003,7 @@ sh echo two > edit.txt
 turn
 say nothing changed
 turn
+wf comment {item} \"still two\"
 wf work release --note \"stopping\"
 ";
     let world = World::new(script).await;
@@ -1034,8 +1035,9 @@ wf work release --note \"stopping\"
             .iter()
             .map(|snapshot| snapshot["at"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["comment", "turn_end"],
-        "the turn end after the comment and the one that changed nothing record none: {snapshots:?}"
+        ["comment", "turn_end", "comment"],
+        "the turn end after the comment and the one that changed nothing record none, a comment \
+         always does: {snapshots:?}"
     );
     let comment = logged_events(&world)
         .iter()
@@ -1061,6 +1063,15 @@ wf work release --note \"stopping\"
     assert_eq!(edited(&snapshots[0]), "one");
     assert_eq!(edited(&snapshots[1]), "two");
     assert_eq!(snapshots[1]["left_out"], serde_json::json!([]));
+    assert_eq!(snapshots[2]["snapshot"], snapshots[1]["snapshot"]);
+    // Nothing was committed: the uncommitted part is against where the branch started.
+    let branch = git_in(
+        &world.bare(),
+        &["rev-parse", &format!("wf/{}", &item[..12])],
+    );
+    for snapshot in &snapshots {
+        assert_eq!(snapshot["head"], branch.as_str());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3262,7 +3273,8 @@ async fn the_diff_of_a_working_item_follows_the_commits_the_daemon_copies_and_ha
     let path = world.wf.run(&["item", "path", short(&item)]);
     let repository = Path::new(path.trim());
 
-    // Edits and a new file are not shown: wf runs no git in the agent's repository for them.
+    // Edits and a new file are not shown: the session took no snapshot of them, and wf runs no
+    // git with the agent repository's own `.git`.
     std::fs::write(repository.join("new.txt"), "brand new\n").unwrap();
     let mut text = std::fs::read_to_string(repository.join("file.txt")).unwrap();
     text.push_str("edited\n");
@@ -3298,6 +3310,95 @@ async fn the_diff_of_a_working_item_follows_the_commits_the_daemon_copies_and_ha
     let diff = world.wf.json(&["item", "diff", short(&item)]);
     assert!(diff["committed"].as_str().unwrap().contains("+edited"));
     assert!(diff.get("uncommitted").is_none(), "{diff}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_diff_of_a_working_item_has_its_latest_snapshot_and_a_comment_shows_the_work_at_it() {
+    let script = "\
+sh echo one > notes.md && \"$WF_BIN\" comment {item} \"drafting\"
+sh echo two > notes.md
+wf comment {item} \"which crate?\" --block
+turn
+sh echo three > notes.md
+wf comment {item} \"went on\"
+hang
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Drafts notes"]);
+    start_session(&world, &item);
+    world
+        .wait("the session to park", |world| {
+            world.sessions()[0]["status"] == "parked"
+        })
+        .await;
+    world.wf.run(&[
+        "comment",
+        short(&item),
+        "Use humantime",
+        "--resolve-blockers",
+    ]);
+    let comment = |text: &str| {
+        logged_events(&world).iter().find_map(|event| {
+            let EventBody::Commented(comment) = &event.content.body else {
+                return None;
+            };
+            (comment.text == text)
+                .then(|| wf_core::id::HashId::to_base32(&wf_core::id::CommentId::from(event.id())))
+        })
+    };
+    // The snapshot at a comment is recorded once the comment is in the log.
+    world
+        .wait("the snapshot at the comment after the park", |world| {
+            let diff = world.wf.json(&["item", "diff", short(&item)]);
+            diff["uncommitted"]
+                .as_str()
+                .is_some_and(|uncommitted| uncommitted.contains("+three"))
+        })
+        .await;
+    let diff = world.wf.json(&["item", "diff", short(&item)]);
+    assert!(diff["committed"].is_null(), "{diff}");
+    let text = world.wf.run(&["item", "diff", short(&item)]);
+    assert!(
+        text.starts_with("the agent has not made any commits\n\nuncommitted, against "),
+        "{text}"
+    );
+
+    // The work at the session's comment, and at the blocker the principal's answer resolves.
+    let at = |text: &str| {
+        let comment = comment(text).unwrap();
+        world
+            .wf
+            .json(&["item", "diff", "--at", &comment[..8], short(&item)])
+    };
+    for (text, written) in [
+        ("drafting", "+one"),
+        ("which crate?", "+two"),
+        ("Use humantime", "+two"),
+        ("went on", "+three"),
+    ] {
+        let diff = at(text);
+        assert_eq!(diff["committed"], "", "{text}: {diff}");
+        let uncommitted = diff["uncommitted"].as_str().unwrap();
+        assert!(uncommitted.contains(written), "{text}: {diff}");
+    }
+    let text = world.wf.run(&[
+        "item",
+        "diff",
+        "--at",
+        &comment("drafting").unwrap()[..8],
+        short(&item),
+    ]);
+    assert!(text.contains("\nuncommitted, against "), "{text}");
+    assert!(text.contains("+one"), "{text}");
+    world.wf.run(&["comment", short(&item), "a remark"]);
+    let error = world.wf.fail(&[
+        "item",
+        "diff",
+        "--at",
+        &comment("a remark").unwrap()[..8],
+        short(&item),
+    ]);
+    assert!(error.contains("shows no work"), "{error}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

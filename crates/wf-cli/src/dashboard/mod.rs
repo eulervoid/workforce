@@ -31,7 +31,7 @@ use wf_core::identity::AgentId;
 use wf_daemon::proto::HeldPermission;
 
 use self::app::{App, Wheel};
-use self::diff::{Changes, ItemWork};
+use self::diff::{Changes, ItemWork, UncommittedFiles};
 use self::restart::{Executable, Mismatch};
 use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
 use crate::commands::{DeviceDiff, ItemDiff};
@@ -648,12 +648,21 @@ impl Feed {
                 None => self.git.insert(workspace.repository()?),
             };
             let now_ms = wf_store::now_ms();
-            match commands::item_diff(workspace, git, item, pane.commit())? {
+            match commands::item_diff(workspace, git, item, pane.work_at())? {
                 ItemDiff::Local(work) => {
                     self.asked_devices.forget(item);
                     let commit = work.shown();
-                    if pane.commit() == Some(commit) && pane.device().is_none() {
-                        // The head did not move.
+                    // A session working here has its uncommitted part in its latest snapshot.
+                    let snapshot = match &work {
+                        wf_vcs::Work::Unmerged { .. } => commands::snapshot_here(workspace, item)?,
+                        wf_vcs::Work::Merged { .. } => None,
+                    };
+                    let at = wf_net::WorkAt {
+                        head: commit,
+                        snapshot,
+                    };
+                    if pane.work_at() == Some(at) && pane.device().is_none() {
+                        // Neither the head nor the snapshot moved.
                         return Ok(());
                     }
                     let changes = if git.has_commits(&work)? {
@@ -661,10 +670,16 @@ impl Feed {
                     } else {
                         Changes::NoCommits
                     };
+                    let uncommitted = match snapshot {
+                        Some(snapshot) => Some(UncommittedFiles::read(
+                            &commands::uncommitted_here(workspace, item, commit, snapshot)?,
+                        )),
+                        None => None,
+                    };
                     pane.read(Ok(ItemWork {
                         commit,
                         changes,
-                        uncommitted: None,
+                        uncommitted,
                     }));
                 }
                 ItemDiff::Device { device, diff } => {
@@ -675,7 +690,7 @@ impl Feed {
                             let work = ItemWork {
                                 commit: work.head,
                                 changes,
-                                uncommitted: None,
+                                uncommitted: work.uncommitted.as_ref().map(UncommittedFiles::read),
                             };
                             pane.read_from_device(device, work, now_ms);
                         }
