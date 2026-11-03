@@ -228,7 +228,6 @@ fn states(state: &State, item: ItemId) -> anyhow::Result<Choice> {
     })
 }
 
-/// The item `item`, while it is live.
 /// The comments of `item` that show the work at a snapshot ([`State::comment_snapshot`]), the
 /// newest first, each with who wrote it and the first line of its text, read from `events`.
 pub(super) fn comments_with_work(
@@ -282,6 +281,7 @@ pub(super) fn comments_with_work(
     })
 }
 
+/// The item `item`, while it is live.
 fn live(state: &State, item: ItemId) -> anyhow::Result<&Item> {
     match state
         .item(item)
