@@ -648,18 +648,25 @@ impl App {
             .collect()
     }
 
-    /// The detail of a row of the Now tab, if it has one.
+    /// The detail a row of the Now tab opens. A session opens its item first, as on the Items
+    /// tab, and the item its session. None for a row that says all there is to say.
     pub fn detail_of(&self, row: &NowRow) -> Option<Detail> {
         match row {
             NowRow::Waiting(key) => match self.waiting(key)? {
-                InboxEntry::Permission { session, .. } => Some(Detail::Session(*session)),
+                InboxEntry::Permission { session, item, .. } => Some(
+                    item.as_ref()
+                        .map_or(Detail::Session(*session), |item| Detail::Item(item.id)),
+                ),
                 InboxEntry::Blocker { item, .. }
                 | InboxEntry::Review { item, .. }
                 | InboxEntry::Notice { item, .. } => Some(Detail::Item(item.id)),
                 // The row says all there is to say.
                 InboxEntry::MachineFault { .. } | InboxEntry::LostPush { .. } => None,
             },
-            NowRow::Session(session) => Some(Detail::Session(*session)),
+            NowRow::Session(session) => Some(
+                self.session_info(*session)
+                    .map_or(Detail::Session(*session), |info| Detail::Item(info.item)),
+            ),
             // A flag about an item shows in the item's notice box.
             NowRow::Flag(flag) => Some(
                 flag.item()
@@ -862,11 +869,34 @@ impl App {
         }
     }
 
-    /// The detail the keys act on: the one opened last, else the selection's.
+    /// The detail the keys act on: the one opened last, else the selection's. A session on the
+    /// Now tab opens its item, but the keys of its row act on the session.
     fn detail_for_keys(&self) -> Option<Detail> {
+        if let Some(session) = self.session_of_now_row() {
+            return Some(Detail::Session(session));
+        }
         match self.stack().last() {
             Some(opened) => Some(opened.detail.clone()),
             None => self.selected_detail(),
+        }
+    }
+
+    /// The session of the selected row of the Now tab, while the list has the keys.
+    fn session_of_now_row(&self) -> Option<SessionId> {
+        if self.tab != Tab::Now || !self.list_has_keys() {
+            return None;
+        }
+        match self.now.selection.get()? {
+            NowRow::Session(session) => Some(*session),
+            NowRow::Waiting(key) => match self.waiting(key)? {
+                InboxEntry::Permission { session, .. } => Some(*session),
+                InboxEntry::Blocker { .. }
+                | InboxEntry::Review { .. }
+                | InboxEntry::Notice { .. }
+                | InboxEntry::MachineFault { .. }
+                | InboxEntry::LostPush { .. } => None,
+            },
+            NowRow::Flag(_) => None,
         }
     }
 

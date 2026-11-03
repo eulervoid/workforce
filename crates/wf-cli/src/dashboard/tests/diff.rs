@@ -142,8 +142,11 @@ fn i_in_a_diff_below_an_item_and_its_session_goes_back_to_the_item() {
 
 #[test]
 fn i_in_a_diff_opened_from_a_session_replaces_it_with_the_item() {
+    // A session of the Agents tab opens on its transcript, not through its item.
     let mut app = app();
-    app.refresh(snapshot());
+    press(&mut app, KeyCode::Char('3'));
+    app.refresh(with_agents());
+    press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Right);
     press(&mut app, KeyCode::Right);

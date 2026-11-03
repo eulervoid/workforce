@@ -1,13 +1,13 @@
 //! Dashboard tests: now.
 
 use super::support::*;
-use crate::dashboard::app::{App, Effect, NowRow, STATUS_LASTS_MS, Scroll, Split, Tab};
+use crate::dashboard::app::{App, Effect, NowRow, Prompt, STATUS_LASTS_MS, Scroll, Split, Tab};
 use crate::dashboard::snapshot::{Detail, InView, InboxEntry, Snapshot};
 use crate::render;
 use crate::view::Flag;
 use jiff::tz::TimeZone;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
-use wf_core::id::{CommentId, ItemId, SessionId};
+use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_harness::Permission;
 
 #[test]
@@ -91,13 +91,17 @@ fn a_session_opens_on_its_transcript_and_esc_goes_back() {
     let mut app = app();
     let coder = app.snapshot.working[0].clone();
     app.transcribed(coder.id, &coder_transcript());
-    // The permission request of the coder is selected first; it opens the coder's session.
-    press(&mut app, KeyCode::Enter);
+    // The permission request of the coder is selected first; it opens the coder's item, and
+    // the item its session.
+    open_through_item(&mut app, coder.id);
     assert_eq!(app.wanted().detail, Some(Detail::Session(coder.id)));
     let mut snapshot = snapshot();
+    let parse = coder.item;
     snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     insta::assert_snapshot!(screen(&mut app, 60, 16));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(parse)));
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.wanted().detail, None);
 }
@@ -111,9 +115,14 @@ fn a_wide_window_shows_the_selection_beside_the_list() {
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
-    assert_eq!(app.wanted().detail, Some(Detail::Session(blocked)));
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
+    let spans = snapshot.working[1].item;
+    assert_eq!(app.wanted().detail, Some(Detail::Item(spans)));
+    snapshot.in_view = Some(item_in_view(
+        spans,
+        "Fix error spans\n".to_owned(),
+        Some(blocked),
+    ));
     app.refresh(snapshot);
     insta::assert_snapshot!(screen(&mut app, 130, 14));
 }
@@ -127,7 +136,12 @@ fn h_and_l_fold_the_list_or_the_detail_to_a_strip() {
         press(&mut app, KeyCode::Char('j'));
     }
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
+    let blocked = &snapshot.working[1];
+    snapshot.in_view = Some(item_in_view(
+        blocked.item,
+        "Fix error spans\n".to_owned(),
+        Some(blocked.id),
+    ));
     app.refresh(snapshot);
     // The list takes the window; the detail is a strip at the right.
     press(&mut app, KeyCode::Char('H'));
@@ -353,9 +367,68 @@ fn a_permission_request_is_answered_where_it_is_listed() {
             answer: Permission::Deny
         })
     );
+    // The row opens the item, but `x` still stops its session.
+    press(&mut app, KeyCode::Char('x'));
+    assert!(matches!(app.prompt, Some(Prompt::Stop { session }) if session == coder));
+    press(&mut app, KeyCode::Esc);
     // Nothing else waits on the parked coder.
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(press(&mut app, KeyCode::Char('a')), None);
+}
+
+#[test]
+fn right_on_a_session_opens_its_item_then_its_transcript_and_esc_goes_back_to_the_item() {
+    let mut app = app();
+    let coder = app.snapshot.working[0].clone();
+    let (item, session) = (HashId::short(&coder.item), HashId::short(&coder.id));
+    app.transcribed(coder.id, &coder_transcript());
+    let mut with_item = snapshot();
+    with_item.in_view = Some(item_in_view(
+        coder.item,
+        "Parse the config lazily.\n".to_owned(),
+        Some(coder.id),
+    ));
+    let mut with_session = snapshot();
+    with_session.in_view = Some(session_in_view(coder.clone()));
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    assert_eq!(app.now.selection.get(), Some(&NowRow::Session(coder.id)));
+    press(&mut app, KeyCode::Right);
+    app.refresh(with_item.clone());
+    let shown = screen(&mut app, 60, 16);
+    assert!(shown.contains(&format!("Now ›▐#{item}▌")), "{shown}");
+    assert!(shown.contains("Parse the config lazily."), "{shown}");
+    press(&mut app, KeyCode::Right);
+    app.refresh(with_session);
+    let shown = screen(&mut app, 60, 16);
+    assert!(
+        shown.contains(&format!("Now › #{item} ›▐coder/{session} · 12m ◆▌")),
+        "{shown}"
+    );
+    assert!(shown.contains("The loader now defers parsing"), "{shown}");
+    press(&mut app, KeyCode::Esc);
+    app.refresh(with_item);
+    let shown = screen(&mut app, 60, 16);
+    assert!(shown.contains(&format!("Now ›▐#{item}▌")), "{shown}");
+}
+
+#[test]
+fn the_item_in_the_breadcrumb_of_a_session_opened_on_now_goes_back_to_it() {
+    let mut app = app();
+    let coder = app.snapshot.working[0].clone();
+    open_through_item(&mut app, coder.id);
+    let mut with_session = snapshot();
+    with_session.in_view = Some(session_in_view(coder.clone()));
+    app.refresh(with_session);
+    let (column, row) = find(
+        &mut app,
+        60,
+        16,
+        &format!("#{} ›", HashId::short(&coder.item)),
+    );
+    app.click(column, row);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(coder.item)));
 }
 
 #[test]
@@ -363,7 +436,7 @@ fn a_session_with_a_request_shows_it_under_its_transcript() {
     let mut app = app();
     let coder = app.snapshot.working[0].clone();
     app.transcribed(coder.id, &coder_transcript());
-    press(&mut app, KeyCode::Enter);
+    open_through_item(&mut app, coder.id);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);

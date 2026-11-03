@@ -801,3 +801,16 @@ pub(super) fn coder_agent() -> AgentId {
         name: AgentName::new("coder").unwrap(),
     }
 }
+
+/// Opens `session` from its selected row of the Now tab the way the keys go: enter opens its
+/// item, and enter in the item, read with `session` as the one it opens, opens the session.
+pub(super) fn open_through_item(app: &mut App, session: SessionId) {
+    press(app, KeyCode::Enter);
+    let Some(Detail::Item(item)) = app.wanted().detail else {
+        panic!("the row opens no item: {:?}", app.wanted().detail);
+    };
+    let mut snapshot = app.snapshot.clone();
+    snapshot.in_view = Some(item_in_view(item, String::new(), Some(session)));
+    app.refresh(snapshot);
+    press(app, KeyCode::Enter);
+}
