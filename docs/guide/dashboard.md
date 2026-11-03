@@ -64,7 +64,10 @@ The daemon keeps a copy of it. When the machine cannot be reached, a line under 
 so, and what was fetched before stays on screen.
 
 While an agent works on the item on this machine, the diff follows what it has committed, as the
-daemon copies its commits into wf's repository at the end of every turn. Only the committed part takes comments on
+daemon copies its commits into wf's repository at the end of every turn. The daemon also keeps a
+snapshot of the agent's files, committed or not, after each of its comments and at the end of each
+turn, in `snapshots/` of the workforce's data, without running anything of the agent's repository's
+own git config. The snapshots stay after the item is merged, as long as its transcripts. Only the committed part takes comments on
 lines: the uncommitted lines are not in any commit to anchor to, and `c` and `r` do nothing on them.
 `p` shows the committed part through git.
 

@@ -1064,6 +1064,41 @@ wf work release --note \"stopping\"
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_snapshots_of_an_item_stay_after_its_agent_repository_is_removed_on_the_merge() {
+    let script = "\
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello
+wf comment {item} \"wrote it\"
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Add hello"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+    let workforce_directory = world.bare().parent().unwrap().to_path_buf();
+    let agent_repository = workforce_directory.join("repos").join(&item[..12]);
+    world
+        .wait(
+            "the merge and the removal of the agent repository",
+            |world| world.item(&item)["state"] == "done" && !agent_repository.exists(),
+        )
+        .await;
+
+    let snapshot_repository = workforce_directory.join("snapshots").join(&item[..12]);
+    let trees = git_in(
+        &snapshot_repository,
+        &["for-each-ref", "--format=%(objectname)", "refs/snapshots"],
+    );
+    let tree = trees.lines().next().expect("the session's latest snapshot");
+    assert_eq!(
+        git_in(
+            &snapshot_repository,
+            &["cat-file", "blob", &format!("{tree}:hello.txt")]
+        ),
+        "hi"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_work_session_without_commits_names_no_head() {
     let script = "\
 wf comment {item} \"nothing yet\"
