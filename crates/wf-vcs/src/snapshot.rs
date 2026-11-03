@@ -40,10 +40,10 @@ pub struct Snapshot {
 }
 
 /// Takes a snapshot of the agent repository of `item` for `session`, whose index in the snapshot
-/// repository is kept between snapshots, so that only the files changed since are read, and whose
-/// latest tree is the reference `refs/snapshots/<session>` there. Makes the snapshot repository on
-/// first use. `.gitignore` and `.gitattributes` among the files apply as
-/// in a commit.
+/// repository is kept between snapshots, so that only the files changed since are read. Its
+/// `previous` is the session's latest recorded snapshot; the snapshot becomes the latest only by
+/// [`record_snapshot`], once it is recorded. Makes the snapshot repository on first use.
+/// `.gitignore` and `.gitattributes` among the files apply as in a commit.
 pub fn take_snapshot(
     workforce_directory: &Path,
     item: ItemId,
@@ -53,7 +53,7 @@ pub fn take_snapshot(
     create_snapshot_repository(&repository, &bare_repository(workforce_directory))?;
     let work_tree = item_repository(workforce_directory, item);
     let index = repository.join(format!("{}.index", session.to_base32()));
-    let latest = format!("refs/snapshots/{}", session.to_base32());
+    let latest = latest_snapshot(session);
     let (Some(repository_text), Some(work_tree_text), Some(index)) =
         (repository.to_str(), work_tree.to_str(), index.to_str())
     else {
@@ -130,19 +130,35 @@ pub fn take_snapshot(
         true => Some(parse_tree("rev-parse", &previous.stdout)?),
         false => None,
     };
-    if previous != Some(tree) {
-        spawn(
-            &repository,
-            &[],
-            arguments(&["update-ref", &latest, &tree.to_string()]),
-        )?
-        .ok()?;
-    }
     Ok(Snapshot {
         tree,
         left_out,
         previous,
     })
+}
+
+/// Makes `tree` the latest recorded snapshot of `session` on `item`, the reference
+/// `refs/snapshots/<session>` in the item's snapshot repository, which the next
+/// [`take_snapshot`] compares with.
+pub fn record_snapshot(
+    workforce_directory: &Path,
+    item: ItemId,
+    session: SessionId,
+    tree: GitOid,
+) -> Result<(), VcsError> {
+    let repository = snapshot_repository(workforce_directory, item);
+    spawn(
+        &repository,
+        &[],
+        ["update-ref", &latest_snapshot(session), &tree.to_string()],
+    )?
+    .ok()?;
+    Ok(())
+}
+
+/// The reference to the latest recorded snapshot of `session`.
+fn latest_snapshot(session: SessionId) -> String {
+    format!("refs/snapshots/{}", session.to_base32())
 }
 
 /// The tree `command` printed.
@@ -213,8 +229,16 @@ mod tests {
             std::fs::write(path, contents).unwrap();
         }
 
-        fn snapshot(&self) -> Snapshot {
+        /// Takes a snapshot without recording it.
+        fn take(&self) -> Snapshot {
             take_snapshot(self.root.path(), self.item, self.session).unwrap()
+        }
+
+        /// Takes a snapshot and records it, as the daemon does once it is in the transcript.
+        fn snapshot(&self) -> Snapshot {
+            let snapshot = self.take();
+            record_snapshot(self.root.path(), self.item, self.session, snapshot.tree).unwrap();
+            snapshot
         }
 
         /// The files of `tree` with their contents.
@@ -279,6 +303,22 @@ mod tests {
         assert_ne!(second.tree, first.tree);
         assert_eq!(second.previous, Some(first.tree));
         assert_eq!(workforce.files(second.tree), [file("added.txt", "added")]);
+    }
+
+    #[test]
+    fn a_snapshot_not_recorded_is_not_the_previous_one_of_the_next() {
+        let workforce = Workforce::new();
+        let first = workforce.snapshot();
+        workforce.write("added.txt", b"added");
+        let unrecorded = workforce.take();
+        assert_eq!(unrecorded.previous, Some(first.tree));
+
+        let next = workforce.take();
+
+        assert_eq!(
+            (next.tree, next.previous),
+            (unrecorded.tree, Some(first.tree))
+        );
     }
 
     #[test]

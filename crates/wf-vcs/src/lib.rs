@@ -24,7 +24,9 @@ pub use agent_repository::{agent_branch_head, remove_agent_repository};
 pub use bare_repository::REMOTE;
 pub use git::{BRIDGE_DESCRIPTOR, GitCli, inherit_as_bridge};
 pub use item_refs::diverged_ref;
-pub use snapshot::{LARGEST_FILE, Snapshot, snapshot_repository, snapshots, take_snapshot};
+pub use snapshot::{
+    LARGEST_FILE, Snapshot, record_snapshot, snapshot_repository, snapshots, take_snapshot,
+};
 pub use target_standing::{TargetStanding, fast_forward_target, push_target, target_standing};
 pub use transfer::Bridge;
 

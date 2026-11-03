@@ -57,7 +57,7 @@ fn append(path: &Path, entry: &TranscriptEntry) -> std::io::Result<()> {
 
 impl Daemon {
     /// Takes a snapshot of the work of the work session `session` on `item` and records it in the
-    /// session's transcript, when its tree differs from the session's previous snapshot. A
+    /// session's transcript, when its tree differs from the session's previous recorded one. A
     /// snapshot that fails is only logged: the work goes on without it.
     pub(super) async fn snapshot_work(
         &self,
@@ -80,7 +80,11 @@ impl Daemon {
                 &transcript,
                 &snapshot_entry(Timestamp::now(), &snapshot, point),
             )
-            .map_err(|error| format!("cannot write {}: {error}", transcript.display()))
+            .map_err(|error| format!("cannot write {}: {error}", transcript.display()))?;
+            // Only a snapshot in the transcript is the previous one of the next, so that one not
+            // written is taken again.
+            wf_vcs::record_snapshot(&workforce_directory, item, session, snapshot.tree)
+                .map_err(|error| wf_core::error_chain(&error))
         })
         .await;
         match recorded {
