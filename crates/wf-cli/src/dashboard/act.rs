@@ -506,7 +506,7 @@ fn set_input(item: ItemId, set: Set, members: Vec<Member>) -> SetInput {
         item,
         set,
         members,
-        filter: Input::default(),
+        search: Input::default(),
         index: 0,
     }
 }

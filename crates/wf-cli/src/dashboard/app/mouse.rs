@@ -163,11 +163,7 @@ impl App {
                 choice.picked()
             }
             Some(Prompt::Set(mut input)) => {
-                if let Some(&member) = input.listed().get(line) {
-                    input.index = line;
-                    let member = &mut input.members[member];
-                    member.marked = !member.marked;
-                }
+                self.pick_found(&mut input, line);
                 self.prompt = Some(Prompt::Set(input));
                 None
             }

@@ -10,7 +10,7 @@ use wf_core::id::{HashId, ItemId};
 
 use super::chrome::SEPARATOR;
 use super::{KeysAt, Themed, accent, clear, highlight, themed};
-use crate::dashboard::app::{App, Choice, Inherited, Prompt, SetInput, Starter, Written};
+use crate::dashboard::app::{App, Choice, Found, Inherited, Prompt, SetInput, Starter, Written};
 use crate::dashboard::hint::{HELP, Place};
 use crate::render;
 use crate::theme;
@@ -128,8 +128,9 @@ fn option_line(option: impl Into<Span<'static>>, selected: bool, accent: Color) 
     }
 }
 
-/// The input for a set: the values listed, marked `[x]` when the item is to have them, and the
-/// typed text that enter adds. Returns where its values are, the first on the top row.
+/// The input for a set: the values found, marked `[x]` when the item is to have them, and the
+/// searched text as the one to create when no value is it. Returns where its rows are, the first
+/// on the top row.
 pub(super) fn draw_set(
     frame: &mut Frame,
     input: &SetInput,
@@ -138,31 +139,26 @@ pub(super) fn draw_set(
     base: Style,
 ) -> Rect {
     let mut lines: Vec<Line> = input
-        .listed()
+        .found()
         .into_iter()
         .enumerate()
-        .map(|(index, member)| {
-            let member = &input.members[member];
-            let mark = if member.marked { "[x]" } else { "[ ]" };
-            let mut line = option_line(
-                format!("{mark} {}", member.value),
-                index == input.index,
-                accent,
-            );
-            if input.set.is_unmet(&member.value) {
+        .map(|(index, found)| {
+            let (row, value) = match found {
+                Found::Member(member) => {
+                    let member = &input.members[member];
+                    let mark = if member.marked { "[x]" } else { "[ ]" };
+                    (format!("{mark} {}", member.value), member.value.as_str())
+                }
+                Found::New(value) => (format!("+ create \"{value}\""), value),
+            };
+            let mut line = option_line(row, index == input.index, accent);
+            if input.set.is_unmet(value) {
                 line.push_span(themed("  no agent of its lane has it", theme::warning()));
             }
             line
         })
         .collect();
-    if let Some(value) = input.new_value() {
-        let mut line = Line::from(themed(" enter adds ", theme::text_dimmed()));
-        line.push_span(Span::raw(value.to_owned()));
-        if input.set.is_unmet(value) {
-            line.push_span(themed("  no agent of its lane has it", theme::warning()));
-        }
-        lines.push(line);
-    } else if lines.is_empty() {
+    if lines.is_empty() {
         lines.push(Line::from(" none yet: type one").themed(theme::text_dimmed()));
     }
     let title = format!(" {} of #{} ", input.set.name(), input.item.short());
@@ -371,8 +367,8 @@ pub(super) fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: R
         }
         Prompt::Set(input) => (
             format!("{}:", input.set.name()),
-            &input.filter,
-            "↑/↓ move · space mark · enter add or apply · esc cancel ",
+            &input.search,
+            "↑/↓ move · enter mark · enter on no text apply · esc cancel ",
         ),
         Prompt::Choose(_) | Prompt::Keys => return,
         Prompt::Answer { blocker, input, .. } => (
