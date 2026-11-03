@@ -672,3 +672,18 @@ fn the_now_tab_lists_the_other_devices_with_when_each_was_seen_and_which_are_gon
         drawn.style_at(flag_column, flag_row).fg
     );
 }
+
+#[test]
+fn a_machine_fault_cut_short_in_its_row_is_in_full_in_a_banner() {
+    let tail = "the quota resets at nine tomorrow";
+    let mut snapshot = snapshot();
+    snapshot.waiting = vec![InboxEntry::MachineFault {
+        title: "claude-code hit its usage limit".to_owned(),
+        what: format!("wait for the reset, or raise it; its agents are tried again later: {tail}"),
+    }];
+    let mut app = App::new(snapshot, TimeZone::UTC);
+    app.resize(60, 24);
+    let shown = screen(&mut app, 60, 24);
+    assert!(shown.contains("quota resets at nine"), "{shown}");
+    assert!(shown.contains("tomorrow"), "{shown}");
+}

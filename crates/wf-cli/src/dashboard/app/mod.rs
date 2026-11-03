@@ -687,6 +687,26 @@ impl App {
         }
     }
 
+    /// The title and the full text of the selected row of the Now tab, if it is one that opens no
+    /// detail because its row says all there is to say, though a row may cut it short.
+    pub fn selected_notice(&self) -> Option<(&str, &str)> {
+        if self.tab != Tab::Now {
+            return None;
+        }
+        let NowRow::Waiting(key) = self.now.selection.get()? else {
+            return None;
+        };
+        match self.waiting(key)? {
+            InboxEntry::MachineFault { title, what } | InboxEntry::LostPush { title, what, .. } => {
+                Some((title, what))
+            }
+            InboxEntry::Permission { .. }
+            | InboxEntry::Blocker { .. }
+            | InboxEntry::Review { .. }
+            | InboxEntry::Notice { .. } => None,
+        }
+    }
+
     fn waiting(&self, key: &InboxKey) -> Option<&InboxEntry> {
         self.snapshot
             .waiting

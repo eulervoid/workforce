@@ -11,7 +11,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Styled};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use self::chrome::{
     counts_line, draw_header, draw_hints, draw_rule, draw_tip, draw_warning, latest_line,
@@ -291,9 +291,49 @@ pub(super) fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     shown
 }
 
+/// Draws the full text of the selected row that a row cuts short, above the panes; returns what
+/// is left of `area`.
+fn draw_banner(frame: &mut Frame, app: &App, area: Rect) -> Rect {
+    let Some((title, what)) = app.selected_notice() else {
+        return area;
+    };
+    let text = Text::from(vec![
+        Line::from(vec![themed("! ", theme::attention()), Span::raw(title)]),
+        Line::from(what).themed(theme::text_dimmed()),
+    ]);
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    let text_area = padded(Rect {
+        x: area.x + 1,
+        width: area.width.saturating_sub(1),
+        ..area
+    });
+    // At most half of the body, so the list stays usable.
+    let lines = u16::try_from(paragraph.line_count(text_area.width)).unwrap_or(u16::MAX);
+    let height = lines.min(area.height / 2);
+    let [banner, rule, rest] = Layout::vertical([
+        Constraint::Length(height),
+        Constraint::Length(u16::from(height > 0)),
+        Constraint::Fill(1),
+    ])
+    .areas(area);
+    frame.render_widget(
+        paragraph,
+        padded(Rect {
+            x: banner.x + 1,
+            width: banner.width.saturating_sub(1),
+            ..banner
+        }),
+    );
+    draw_rule(frame, rule);
+    rest
+}
+
 pub(super) fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
     match app.tab {
-        Tab::Now => draw_split(frame, app, area, now_lines),
+        Tab::Now => {
+            let area = draw_banner(frame, app, area);
+            draw_split(frame, app, area, now_lines)
+        }
         Tab::Items => draw_split(frame, app, area, items_lines),
         Tab::Log => {
             let mut spots = Vec::new();

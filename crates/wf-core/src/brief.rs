@@ -58,6 +58,7 @@ impl Brief {
             .agent(&agent.name, agent.principal)
             .and_then(|definition| definition.instructions.clone());
         let mentioned = mentioned(state, session.id(), item.id(), sources);
+        let change_requests = open_change_requests(state, item, sources);
         Some(match session.role() {
             SessionRole::Work => Brief::Work(WorkBrief {
                 agent: agent.name.to_string(),
@@ -69,8 +70,8 @@ impl Brief {
                 target,
                 checks,
                 dependencies: dependencies(state, item, sources),
-                change_requests: open_change_requests(state, item, sources),
-                earlier: earlier(state, item, sources),
+                earlier: earlier(state, item, sources, &change_requests),
+                change_requests,
                 mentioned,
                 diverged: diverged(state, item, sources),
             }),
@@ -85,7 +86,7 @@ impl Brief {
                 target,
                 checks,
                 step: review_step(state, item.id(), &step),
-                earlier: earlier(state, item, sources),
+                earlier: earlier(state, item, sources, &[]),
                 mentioned,
             }),
             SessionRole::Supervise => {
@@ -106,7 +107,7 @@ impl Brief {
                     item: HashId::short(&item.id()),
                     title: item.title().to_string(),
                     body: item.body().render_numbered(),
-                    earlier: earlier(state, item, sources),
+                    earlier: earlier(state, item, sources, &[]),
                     mentioned,
                     blockers,
                     principal,
@@ -145,7 +146,7 @@ impl Brief {
                     item: HashId::short(&item.id()),
                     title: item.title().to_string(),
                     body: item.body().render_numbered(),
-                    earlier: earlier(state, item, sources),
+                    earlier: earlier(state, item, sources, &[]),
                     mentioned,
                     attempts,
                 })
@@ -201,9 +202,10 @@ pub fn resumed_text(
         };
         if let Some(note) = last_comment(dependency, sources) {
             text.push_str(&format!(
-                "\n- #{} {}: {note}",
+                "\n- #{} {}: {}",
                 HashId::short(&dependency.id()),
-                dependency.title()
+                dependency.title(),
+                in_item(&note)
             ));
         }
     }
@@ -281,15 +283,25 @@ fn told_lines(
                 speaker(state, &comment.by),
                 comment.kind.label(),
                 written.comment.short(),
-                text.trim()
+                in_item(&text)
             ))
         })
         .collect()
 }
 
 /// Everything said on the item, oldest first.
-fn earlier(state: &State, item: &Item, sources: &impl Sources) -> Vec<Earlier> {
-    let mut comments: Vec<_> = item.comments().iter().collect();
+/// `listed` are the open comments the brief shows on their own, which are left out here.
+fn earlier(
+    state: &State,
+    item: &Item,
+    sources: &impl Sources,
+    listed: &[OpenComment],
+) -> Vec<Earlier> {
+    let mut comments: Vec<_> = item
+        .comments()
+        .iter()
+        .filter(|(id, _)| listed.iter().all(|open| open.comment != id.short()))
+        .collect();
     comments.sort_by_key(|(id, comment)| (comment.at, **id));
     comments
         .into_iter()
@@ -523,7 +535,7 @@ impl WorkBrief {
                 );
                 match &dependency.note {
                     Some(note) => {
-                        let _ = writeln!(text, ": {}", note.trim());
+                        let _ = writeln!(text, ": {}", in_item(note));
                     }
                     None => text.push('\n'),
                 }
@@ -559,10 +571,8 @@ impl WorkBrief {
              - Commit small and often: only commits carry over to a later session.\n\
              - Tick each step as soon as it is done, not all at the end: `wf item check {item} <number>`\n\
              - Report while you work: `wf comment {item} \"<what you chose, what you rejected, and why>\" --step <number>`\n  \
-             - Add `--done` to tick the step with the same command.\n  \
-             - Leave out `--step` for a report on the whole item.\n  \
-             - Write each report so that it makes sense on its own.\n  \
-             - Write it in markdown: `code` for names, paths and commands, a list for several points.",
+             - Add `--done` to also tick the step; leave out `--step` to report on the whole item.\n  \
+             - Each report must make sense on its own. Write markdown: `code` for names, paths and commands.",
             branch = self.branch,
             target = self.target,
         );
@@ -584,7 +594,8 @@ impl WorkBrief {
         }
         let _ = writeln!(
             text,
-            "- Need an answer from someone: `wf comment {item} \"<question>\" --block`, then end \
+            "\n## How to finish\n\n\
+             - Need an answer from someone: `wf comment {item} \"<question>\" --block`, then end \
              your turn. You are prompted again once it is answered.\n\
              - Finished: `wf work submit --note \"<what the reviewer should know>\"`. Your commits \
              are reviewed and merged from there.\n\
@@ -853,27 +864,23 @@ pub fn nudge(item: ItemId, role: SessionRole) -> String {
             "Continue.\n\
              - Finished: `wf work submit --note \"<what the reviewer should know>\"`\n\
              - Need an answer from someone: `wf comment {item} \"<question>\" --block`, then end your turn.\n\
-             - Stuck: `wf work release --note \"<why>\"`\n\
-             {AGAIN}"
+             - Stuck: `wf work release --note \"<why>\"`"
         ),
         SessionRole::Review { .. } => format!(
             "Continue, and give exactly one verdict.\n\
              - Good as it is: `wf review --approve --note \"<what you checked>\"`\n\
              - Needs changes: `wf comment {item} \"<what to change>\" --request-change` for each, \
              then `wf review --request-changes`\n\
-             - Your principal has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
-             {AGAIN}"
+             - Your principal has to decide: `wf review --escalate --note \"<what they have to decide>\"`"
         ),
         SessionRole::Diagnose => format!(
             "Continue, and report in one comment.\n\
-             - `wf comment {item} \"<what went wrong, and what to do differently>\"`\n\
-             {AGAIN}"
+             - `wf comment {item} \"<what went wrong, and what to do differently>\"`"
         ),
         SessionRole::Supervise => format!(
             "Continue, and answer in one comment.\n\
              - You can answer: `wf comment {item} \"<answer>\" --resolve-blockers`\n\
-             - Your principal has to decide: `wf comment {item} \"<what they have to decide>\" --block --resolve-blockers`\n\
-             {AGAIN}"
+             - Your principal has to decide: `wf comment {item} \"<what they have to decide>\" --block --resolve-blockers`"
         ),
     }
 }
@@ -909,6 +916,11 @@ pub fn checks_failed_nudge(item: ItemId, comment: &str, failures: &str) -> Strin
 /// The last rule of every brief.
 const AGAIN: &str = "- Lost track: `wf work brief` prints this brief again.";
 
+/// `text` trimmed, with its later lines indented so that they stay inside the list item they follow.
+fn in_item(text: &str) -> String {
+    text.trim().replace('\n', "\n  ")
+}
+
 fn instructions(text: &mut String, instructions: Option<&str>) {
     if let Some(instructions) = instructions.filter(|instructions| !instructions.trim().is_empty())
     {
@@ -933,7 +945,7 @@ fn history(text: &mut String, earlier: &[Earlier]) {
             "- {} ({}): {}",
             earlier.by,
             earlier.kind,
-            earlier.text.trim()
+            in_item(&earlier.text)
         );
     }
     text.push('\n');
@@ -951,7 +963,7 @@ fn mentions(text: &mut String, mentioned: &[Mentioned]) {
             mention.by,
             mention.item,
             mention.title,
-            mention.text.trim()
+            in_item(&mention.text)
         );
     }
     text.push('\n');
@@ -964,7 +976,7 @@ fn open_comments(text: &mut String, open: &[OpenComment]) {
             "- {} by {}: {}",
             comment.comment,
             comment.by,
-            comment.text.trim()
+            in_item(&comment.text)
         );
     }
     text.push('\n');
