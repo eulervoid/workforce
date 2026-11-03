@@ -4,7 +4,7 @@ mod permission;
 mod run;
 mod transcript;
 
-pub use agent_client_protocol::schema::v1::ToolKind;
+pub use agent_client_protocol::v1::schema::ToolKind;
 pub use agent_client_protocol::{AcpAgentConfig, BoxFuture};
 pub use permission::{
     Decider, Decision, MissingOption, Permission, PermissionRequest, Permissions,

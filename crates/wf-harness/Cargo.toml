@@ -8,7 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-agent-client-protocol = { version = "3.3", features = ["process"] }
+agent-client-protocol = { version = "5.0", features = ["process"] }
 humantime.workspace = true
 jiff.workspace = true
 serde.workspace = true

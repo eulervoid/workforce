@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, NewSessionRequest,
     PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     ResumeSessionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
@@ -12,14 +13,14 @@ use agent_client_protocol::schema::v1::{
     SessionConfigValueId, SessionId, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, TextContent,
 };
-use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
+use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client};
 use jiff::Timestamp;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-pub use agent_client_protocol::schema::v1::StopReason;
+pub use agent_client_protocol::v1::schema::StopReason;
 
 use crate::permission::{PermissionRequest, Permissions};
 use crate::transcript::{Direction, TranscriptEntry, TranscriptWriter};
@@ -56,7 +57,7 @@ impl Error {
     /// Whether the agent says that it needs a login first, as one whose login lapsed does.
     pub fn needs_login(&self) -> bool {
         match self {
-            Error::Protocol(error) => error.code == agent_client_protocol::ErrorCode::AuthRequired,
+            Error::Protocol(error) => error.code == agent_client_protocol::ErrorCode::AUTH_REQUIRED,
             Error::Transcript(_)
             | Error::Panicked
             | Error::ExitedBeforeOpen
@@ -196,6 +197,7 @@ fn choose_model(
 /// again without prompting it.
 pub async fn models(agent: AcpAgentConfig, directory: PathBuf) -> Result<Vec<Model>, Error> {
     let models = Client
+        .v1()
         .connect_with(
             spawned(agent),
             async move |connection: ConnectionTo<Agent>| {
@@ -486,7 +488,7 @@ impl Conversation {
 
         let task = tokio::spawn(async move {
             let outcome = Client
-                .builder()
+                .v1()
                 .on_receive_notification(
                     async move |notification: SessionNotification, _connection| {
                         if !unheard.load(Ordering::SeqCst)
@@ -591,9 +593,8 @@ impl Conversation {
                         }
                         Opening::Resume(_) => {
                             let _ = refused.send(Error::CannotResume);
-                            return Err(agent_client_protocol::util::internal_error(
-                                "cannot resume",
-                            ));
+                            return Err(agent_client_protocol::Error::internal_error()
+                                .data("cannot resume"));
                         }
                     };
                     let options = options.unwrap_or_default();
@@ -616,9 +617,8 @@ impl Conversation {
                             }
                             Err(error) => {
                                 let _ = refused.send(error);
-                                return Err(agent_client_protocol::util::internal_error(
-                                    "unknown model",
-                                ));
+                                return Err(agent_client_protocol::Error::internal_error()
+                                    .data("unknown model"));
                             }
                         }
                     }
@@ -903,7 +903,7 @@ mod tests {
 
 #[cfg(test)]
 mod model_tests {
-    use agent_client_protocol::schema::v1::SessionConfigSelect;
+    use agent_client_protocol::v1::schema::SessionConfigSelect;
 
     use super::*;
 

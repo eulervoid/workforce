@@ -1,6 +1,6 @@
 //! What an agent asks permission for, and how the answer is given.
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, SelectedPermissionOutcome,
     ToolCallUpdateFields, ToolKind,
 };
