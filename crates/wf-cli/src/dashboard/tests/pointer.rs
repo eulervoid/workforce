@@ -136,7 +136,7 @@ fn the_list_behind_an_open_detail_takes_no_keys() {
     assert!(app.prompt.is_none());
     assert_eq!(app.item_groups().len(), with_items().items.len());
     press(&mut app, KeyCode::Char('?'));
-    assert!(matches!(app.prompt, Some(Prompt::Keys)));
+    assert!(matches!(app.prompt, Some(Prompt::Keys { .. })));
     press(&mut app, KeyCode::Esc);
     assert_eq!(press(&mut app, KeyCode::Char('q')), Some(Effect::Quit));
 }
@@ -158,7 +158,7 @@ fn a_click_on_a_tab_switches_to_it() {
     press(&mut app, KeyCode::Char('?'));
     app.click(column, row);
     assert_eq!(app.tab, Tab::Items);
-    assert!(matches!(app.prompt, Some(Prompt::Keys)));
+    assert!(matches!(app.prompt, Some(Prompt::Keys { .. })));
     // The filter of the log lets the mouse through, and is taken as typed.
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('4'));

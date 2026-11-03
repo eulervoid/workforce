@@ -101,7 +101,7 @@ impl KeysAt {
                 | Prompt::Stop { .. },
             ) => KeysAt::Footer,
             Some(Prompt::Choose(_) | Prompt::Set(_)) => KeysAt::Choice,
-            Some(Prompt::Keys) => KeysAt::Keys,
+            Some(Prompt::Keys { .. }) => KeysAt::Keys,
             None => match (app.tab, app.list_has_keys()) {
                 (Tab::Now | Tab::Items | Tab::Agents | Tab::Log, true) => KeysAt::List,
                 (Tab::Now | Tab::Items | Tab::Agents | Tab::Log, false) => KeysAt::Detail,
@@ -231,15 +231,18 @@ pub(super) fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
             shown.clickable.choice = Some(values);
             draw_prompt(frame, app, prompt, keys);
         }
-        Some(Prompt::Keys) => {
-            let left_out = draw_keys(frame, accent(app, KeysAt::Keys), body, app.base);
-            let hint = if left_out {
-                " any key closes · a wider window shows more"
-            } else {
-                " any key closes"
-            };
+        Some(Prompt::Keys { scroll }) => {
+            shown.keys = Some(draw_keys(
+                frame,
+                accent(app, KeysAt::Keys),
+                *scroll,
+                body,
+                app.base,
+            ));
             frame.render_widget(
-                Paragraph::new(Line::from(hint).themed(theme::text_dimmed())),
+                Paragraph::new(
+                    Line::from(" j/k scroll · any other key closes").themed(theme::text_dimmed()),
+                ),
                 keys,
             );
         }

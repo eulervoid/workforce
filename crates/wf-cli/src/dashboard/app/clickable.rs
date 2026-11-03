@@ -15,6 +15,8 @@ use crate::dashboard::transcript_lines::EntryCursor;
 pub struct Drawn {
     pub detail: Option<DrawnDetail>,
     pub list_top: Option<usize>,
+    /// The scroll of the keys, while they are open.
+    pub keys: Option<Scroll>,
     pub clickable: Clickable,
     /// What is under the pointer.
     pub hovered: Option<Hovered>,

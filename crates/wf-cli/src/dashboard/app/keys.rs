@@ -72,7 +72,11 @@ impl App {
                 self.jump_back();
             }
             KeyCode::Char('q') => return Some(Effect::Quit),
-            KeyCode::Char('?') => self.prompt = Some(Prompt::Keys),
+            KeyCode::Char('?') => {
+                self.prompt = Some(Prompt::Keys {
+                    scroll: Scroll::At(0),
+                });
+            }
             KeyCode::Char('1') => self.tab = Tab::Now,
             KeyCode::Char('2') => self.tab = Tab::Items,
             KeyCode::Char('3') => self.tab = Tab::Agents,

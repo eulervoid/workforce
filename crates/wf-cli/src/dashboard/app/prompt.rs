@@ -434,8 +434,10 @@ pub enum Prompt {
     Stop {
         session: SessionId,
     },
-    /// The keys, until any key is pressed.
-    Keys,
+    /// The keys, scrolled by the keys that scroll a text, until any other key is pressed.
+    Keys {
+        scroll: Scroll,
+    },
 }
 
 /// What becomes of a comment on lines once it is written.
@@ -716,7 +718,10 @@ impl App {
                 KeyCode::Char('n') | KeyCode::Esc => (None, None),
                 _ => (Some(Prompt::Stop { session }), None),
             },
-            Prompt::Keys => (None, None),
+            Prompt::Keys { scroll } => match scroll.key(key, self.page()) {
+                Some(scroll) => (Some(Prompt::Keys { scroll }), None),
+                None => (None, None),
+            },
         }
     }
 
