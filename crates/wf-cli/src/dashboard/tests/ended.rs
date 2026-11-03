@@ -268,12 +268,22 @@ fn the_crumb_of_a_session_names_its_agent_and_session_with_its_age_and_status() 
     let short = HashId::short(&coder.id);
     let live = screen(&mut app, 90, 16);
     assert!(live.contains(&format!("▐◆ coder/{short} · 12m▌")), "{live}");
-    app.refresh(coder_stopped(None));
-    let stopped = screen(&mut app, 90, 16);
-    assert!(
-        stopped.contains(&format!("▐coder/{short} · 12m · cancelled▌")),
-        "{stopped}"
-    );
+    // Ended: a mark by its outcome, the reason at the end.
+    for (reason, crumb) in [
+        (EndReason::Submitted, "✓ coder/{} · 12m · submitted"),
+        (EndReason::Failed, "✗ coder/{} · 12m · failed"),
+        (EndReason::Cancelled, "⊘ coder/{} · 12m · cancelled"),
+    ] {
+        let mut snapshot = coder_stopped(None);
+        snapshot.in_view = Some(session_in_view(with_status(
+            coder.clone(),
+            ended(reason, 0),
+        )));
+        app.refresh(snapshot);
+        let stopped = screen(&mut app, 90, 16);
+        let crumb = crumb.replace("{}", &short);
+        assert!(stopped.contains(&format!("▐{crumb}▌")), "{stopped}");
+    }
 }
 
 #[test]

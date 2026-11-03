@@ -6,6 +6,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use wf_core::id::HashId;
+use wf_core::session::Outcome;
 
 use super::lists::{age, cut_spans};
 use super::{KeysAt, Themed, accent, ansi_text, highlight_ends, themed};
@@ -309,7 +310,8 @@ pub(super) fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<S
     spots
 }
 
-/// `◆ coder/k3j1ab · 12m`, `◇ coder/k3j1ab · 12m · parked` or `coder/k3j1ab · 12m · ended because …`
+/// `◆ coder/k3j1ab · 12m`, `◇ coder/k3j1ab · 12m · parked` or, ended, `✓ coder/k3j1ab · 12m ·
+/// submitted` with a mark by its outcome: ✓ handed in or finished, ✗ failed, ⊘ neither.
 pub(super) fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
     let name = Span::raw(format!(
         "{}/{} · {}",
@@ -321,7 +323,12 @@ pub(super) fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'stati
         SessionStatus::Live => vec![themed("◆ ", theme::live()), name],
         SessionStatus::Parked => vec![themed("◇ ", theme::live()), name, Span::raw(" · parked")],
         SessionStatus::Ended { reason, .. } => {
-            vec![name, Span::raw(format!(" · {}", reason.label()))]
+            let mark = match reason.outcome() {
+                Outcome::Submitted | Outcome::Finished => themed("✓ ", theme::success()),
+                Outcome::Failed => themed("✗ ", theme::error()),
+                Outcome::Neither => themed("⊘ ", theme::text_dimmed()),
+            };
+            vec![mark, name, Span::raw(format!(" · {}", reason.label()))]
         }
     }
 }
