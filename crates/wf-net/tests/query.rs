@@ -1,4 +1,4 @@
-//! `wf/query/1` in memory, and between two real endpoints.
+//! `wf/query/2` in memory, and between two real endpoints.
 
 mod common;
 
@@ -10,15 +10,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use n0_future::boxed::BoxFuture;
-use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
+use wf_core::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::DeviceSigner;
-use wf_core::session::{CommitId, GitOid};
+use wf_core::session::{CommentSnapshot, CommitId, GitOid};
 use wf_core::testing::*;
 use wf_net::frame::{FrameError, MAX_FRAME_LEN};
 use wf_net::{
-    DiffAnswer, DiffRequest, Network, Node, Query, QueryError, QuerySource, SourceError,
-    TRANSCRIPT_PART_LEN, TranscriptAnswer, TranscriptRequest, Work, query_initiate,
-    query_initiate_within, query_respond, query_respond_within, read_query,
+    DiffAnswer, DiffRequest, Network, Node, Query, QueryError, QuerySource, SnapshotRequest,
+    SourceError, TRANSCRIPT_PART_LEN, TranscriptAnswer, TranscriptRequest, Uncommitted, Work,
+    WorkAt, query_initiate, query_initiate_within, query_respond, query_respond_within, read_query,
 };
 use wf_store::{RedbStore, Replica};
 
@@ -30,19 +30,33 @@ fn commit(byte: u8) -> CommitId {
     CommitId::Git(GitOid::from_bytes([byte; 20]))
 }
 
-fn work(head: CommitId) -> Work {
+fn tree(byte: u8) -> GitOid {
+    GitOid::from_bytes([byte; 20])
+}
+
+/// Work at `head` whose latest snapshot is `snapshot`.
+fn work_at(head: CommitId, snapshot: Option<GitOid>) -> Work {
     Work {
         target: "main".into(),
         head,
         committed: "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@ fn main\n-old\n+new\n".into(),
+        uncommitted: snapshot.map(|snapshot| Uncommitted {
+            snapshot,
+            diff: "diff --git a/notes.md b/notes.md\n@@ -0,0 +1 @@\n+draft\n".into(),
+        }),
     }
 }
 
-/// The work of the item in the agent repository, if the device has one, and the transcripts of
-/// the sessions of the device, with whether each ended.
+fn work(head: CommitId) -> Work {
+    work_at(head, Some(tree(9)))
+}
+
+/// The work of the item in the agent repository, if the device has one, the work at the snapshots
+/// of its sessions, and the transcripts of the sessions of the device, with whether each ended.
 #[derive(Default)]
 struct AgentRepository {
     work: Option<Work>,
+    snapshots: Vec<(CommentSnapshot, Work)>,
     transcripts: HashMap<SessionId, (Vec<u8>, bool)>,
 }
 
@@ -67,12 +81,25 @@ impl QuerySource for AgentRepository {
         &self,
         _: WorkforceId,
         _: ItemId,
-        since: Option<CommitId>,
+        since: Option<WorkAt>,
     ) -> BoxFuture<Result<DiffAnswer, SourceError>> {
         let answer = match &self.work {
             None => DiffAnswer::NotHere,
-            Some(work) if since == Some(work.head) => DiffAnswer::Unchanged,
+            Some(work) if since == Some(work.at()) => DiffAnswer::Unchanged,
             Some(work) => DiffAnswer::Work(work.clone()),
+        };
+        Box::pin(async move { Ok(answer) })
+    }
+
+    fn snapshot(
+        &self,
+        _: WorkforceId,
+        _: ItemId,
+        at: CommentSnapshot,
+    ) -> BoxFuture<Result<DiffAnswer, SourceError>> {
+        let answer = match self.snapshots.iter().find(|(taken, _)| *taken == at) {
+            None => DiffAnswer::NotHere,
+            Some((_, work)) => DiffAnswer::Work(work.clone()),
         };
         Box::pin(async move { Ok(answer) })
     }
@@ -95,7 +122,7 @@ impl QuerySource for AgentRepository {
     }
 }
 
-fn request(workforce: WorkforceId, since: Option<CommitId>) -> DiffRequest {
+fn request(workforce: WorkforceId, since: Option<WorkAt>) -> DiffRequest {
     DiffRequest {
         workforce,
         item: item(),
@@ -117,8 +144,38 @@ async fn ask<R: wf_net::QueryRequest>(source: &AgentRepository, asked: R) -> R::
     answer.unwrap()
 }
 
-async fn ask_diff(source: &AgentRepository, since: Option<CommitId>) -> DiffAnswer {
+async fn ask_diff(source: &AgentRepository, since: Option<WorkAt>) -> DiffAnswer {
     ask(source, request(Fixture::new(1).workforce(), since)).await
+}
+
+fn taken_at(byte: u8) -> CommentSnapshot {
+    CommentSnapshot::Taken {
+        session: session(1),
+        comment: CommentId::from(EventId::of(&[byte])),
+    }
+}
+
+fn parked_on(byte: u8) -> CommentSnapshot {
+    CommentSnapshot::Parked {
+        session: session(1),
+        blocker: CommentId::from(EventId::of(&[byte])),
+    }
+}
+
+async fn ask_snapshot(source: &AgentRepository, at: CommentSnapshot) -> DiffAnswer {
+    let request = SnapshotRequest {
+        workforce: Fixture::new(1).workforce(),
+        item: item(),
+        at,
+    };
+    ask(source, request).await
+}
+
+fn with_snapshots(snapshots: Vec<(CommentSnapshot, Work)>) -> AgentRepository {
+    AgentRepository {
+        snapshots,
+        ..AgentRepository::default()
+    }
 }
 
 fn session(byte: u8) -> SessionId {
@@ -146,17 +203,60 @@ async fn a_diff_is_answered_with_the_work() {
         DiffAnswer::Work(work(commit(1)))
     );
     assert_eq!(
-        ask_diff(&source, Some(commit(2))).await,
+        ask_diff(&source, Some(work(commit(2)).at())).await,
         DiffAnswer::Work(work(commit(1)))
     );
 }
 
 #[tokio::test]
-async fn the_same_head_is_unchanged() {
+async fn the_same_head_and_snapshot_are_unchanged() {
     let source = AgentRepository::with_work(Some(work(commit(1))));
     assert_eq!(
-        ask_diff(&source, Some(commit(1))).await,
+        ask_diff(&source, Some(work(commit(1)).at())).await,
         DiffAnswer::Unchanged
+    );
+}
+
+#[tokio::test]
+async fn a_new_snapshot_on_the_same_head_is_answered_with_the_work() {
+    let source = AgentRepository::with_work(Some(work_at(commit(1), Some(tree(2)))));
+    for seen in [None, Some(tree(1))] {
+        assert_eq!(
+            ask_diff(&source, Some(work_at(commit(1), seen).at())).await,
+            DiffAnswer::Work(work_at(commit(1), Some(tree(2))))
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_work_at_a_snapshot_is_answered_and_one_not_here_is_not_here() {
+    let at_comment = work_at(commit(1), Some(tree(1)));
+    let parked = work_at(commit(2), Some(tree(2)));
+    let source = with_snapshots(vec![
+        (taken_at(1), at_comment.clone()),
+        (parked_on(2), parked.clone()),
+    ]);
+    assert_eq!(
+        ask_snapshot(&source, taken_at(1)).await,
+        DiffAnswer::Work(at_comment)
+    );
+    assert_eq!(
+        ask_snapshot(&source, parked_on(2)).await,
+        DiffAnswer::Work(parked)
+    );
+    for missing in [taken_at(2), parked_on(1)] {
+        assert_eq!(ask_snapshot(&source, missing).await, DiffAnswer::NotHere);
+    }
+}
+
+#[tokio::test]
+async fn the_work_at_a_snapshot_above_the_largest_answer_is_too_large() {
+    let mut huge = work(commit(1));
+    huge.uncommitted.as_mut().unwrap().diff = "x".repeat(MAX_FRAME_LEN as usize + 1);
+    let source = with_snapshots(vec![(taken_at(1), huge)]);
+    assert_eq!(
+        ask_snapshot(&source, taken_at(1)).await,
+        DiffAnswer::TooLarge
     );
 }
 
@@ -313,7 +413,11 @@ async fn a_bound_device_is_answered_and_a_stranger_is_refused() {
     }
     let fixture = Fixture::new(2);
     let holder = node(&fixture, &fixture.devices[0]).await;
-    holder.serve_query(Arc::new(AgentRepository::with_work(Some(work(commit(1))))));
+    holder.serve_query(Arc::new(AgentRepository {
+        work: Some(work(commit(1))),
+        snapshots: vec![(taken_at(1), work_at(commit(1), Some(tree(1))))],
+        ..AgentRepository::default()
+    }));
     let member = node(&fixture, &fixture.devices[1]).await;
     let stranger = node(&fixture, &DeviceSigner::from_bytes(&[200; 32]).unwrap()).await;
 
@@ -327,11 +431,21 @@ async fn a_bound_device_is_answered_and_a_stranger_is_refused() {
             holder.local_addr(),
             fixture.workforce(),
             item(),
-            Some(commit(1)),
+            Some(work(commit(1)).at()),
         )
         .await
         .unwrap();
     assert_eq!(answer, DiffAnswer::Unchanged);
+    let answer = member
+        .query_snapshot(
+            holder.local_addr(),
+            fixture.workforce(),
+            item(),
+            taken_at(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer, DiffAnswer::Work(work_at(commit(1), Some(tree(1)))));
 
     let refused = stranger
         .query_diff(holder.local_addr(), fixture.workforce(), item(), None)

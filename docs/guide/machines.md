@@ -114,8 +114,9 @@ Devices find each other through iroh, with the public relays and address lookup 
 ## Seeing the work of another machine
 
 An item whose session runs on another machine has its agent repository only there. `wf item diff`
-and the dashboard's diff ask that machine, through the daemon, for the work it has committed, so
-you can follow an agent from your laptop while it works on a desktop. Both machines need to be
+and the dashboard's diff ask that machine, through the daemon, for the work it has committed and
+the latest snapshot of what it has not, so you can follow an agent from your laptop while it works
+on a desktop. `wf item diff --at` and the dashboard ask it the same way for the work at a comment. Both machines need to be
 online and have synced; a machine that cannot be reached is said so, and the dashboard keeps the
 last diff it had, with its age. The answer is asked for when you look and is not stored or synced.
 

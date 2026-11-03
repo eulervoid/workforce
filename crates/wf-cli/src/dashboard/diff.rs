@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
 use wf_core::event::{CommentKind, DiffSide, LineAnchor};
 use wf_core::identity::DeviceKey;
-use wf_core::session::CommitId;
+use wf_core::session::{CommitId, GitOid};
 use wf_vcs::diff::{Content, DiffLine, FileDiff};
 
 use super::app::FirstRow;
@@ -22,10 +22,28 @@ pub struct ItemWork {
     /// the merge.
     pub commit: CommitId,
     pub changes: Changes,
-    /// The files the session has changed in its agent repository since `commit`, new files included;
-    /// `None` when the repository was not read. They are not part of the work that review and merge
-    /// see, so no comment on lines goes to them.
-    pub uncommitted: Option<Vec<FileDiff>>,
+    /// The files the session has changed in its agent repository since `commit`, new files
+    /// included, as its latest snapshot shows them; `None` without a snapshot. They are not part
+    /// of the work that review and merge see, so no comment on lines goes to them.
+    pub uncommitted: Option<UncommittedFiles>,
+}
+
+/// The uncommitted part of the work: what a snapshot of the agent repository changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UncommittedFiles {
+    /// The tree of the snapshot.
+    pub snapshot: GitOid,
+    pub files: Vec<FileDiff>,
+}
+
+impl UncommittedFiles {
+    /// The files of `uncommitted`, as a device sent them.
+    pub fn read(uncommitted: &wf_net::Uncommitted) -> Self {
+        Self {
+            snapshot: uncommitted.snapshot,
+            files: wf_vcs::diff::parse(&uncommitted.diff),
+        }
+    }
 }
 
 /// What the work changes against its target.
@@ -254,6 +272,20 @@ impl DiffPane {
         }
     }
 
+    /// Where the work shown is, once read: its commit and the snapshot of its uncommitted part.
+    pub fn work_at(&self) -> Option<wf_net::WorkAt> {
+        match &self.work {
+            Some(Ok(work)) => Some(wf_net::WorkAt {
+                head: work.commit,
+                snapshot: work
+                    .uncommitted
+                    .as_ref()
+                    .map(|uncommitted| uncommitted.snapshot),
+            }),
+            Some(Err(_)) | None => None,
+        }
+    }
+
     /// Takes in the work as read again. The cursor stays on its row, as near as there is one.
     /// A selection is of lines that may be gone.
     pub fn read(&mut self, work: Result<ItemWork, String>) {
@@ -344,9 +376,9 @@ impl DiffPane {
     pub fn uncommitted_files(&self) -> &[FileDiff] {
         match &self.work {
             Some(Ok(ItemWork {
-                uncommitted: Some(files),
+                uncommitted: Some(uncommitted),
                 ..
-            })) => files,
+            })) => &uncommitted.files,
             Some(Ok(ItemWork {
                 uncommitted: None, ..
             }))
@@ -381,7 +413,7 @@ impl DiffPane {
             .unwrap_or_default()
     }
 
-    /// Whether the agent repository was read, so the uncommitted part is shown, even if it has no files.
+    /// Whether a snapshot was read, so the uncommitted part is shown, even if it has no files.
     pub fn has_uncommitted_part(&self) -> bool {
         matches!(
             &self.work,

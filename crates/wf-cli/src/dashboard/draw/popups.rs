@@ -93,6 +93,11 @@ pub(super) fn draw_choice(
             format!(" recovery of #{} ", short(item)),
             levels_or_type(levels, of_type),
         ),
+
+        Choice::WorkAt { item, comments, .. } => (
+            format!(" the work of #{} at ", short(item)),
+            comments.iter().map(|(_, label)| label.clone()).collect(),
+        ),
     };
     let lines: Vec<Line> = options
         .into_iter()

@@ -20,9 +20,9 @@ pub use log::{LogError, SyncLog};
 pub use node::{NetError, Network, Node, SourceError, device_key, endpoint_id};
 pub use query::{
     DiffAnswer, DiffRequest, QUERY_ALPN, Query, QueryError, QueryRequest, QuerySource,
-    TRANSCRIPT_PART_LEN, TranscriptAnswer, TranscriptRequest, Work, initiate as query_initiate,
-    initiate_within as query_initiate_within, read_query, respond as query_respond,
-    respond_within as query_respond_within,
+    SnapshotRequest, TRANSCRIPT_PART_LEN, TranscriptAnswer, TranscriptRequest, Uncommitted, Work,
+    WorkAt, initiate as query_initiate, initiate_within as query_initiate_within, read_query,
+    respond as query_respond, respond_within as query_respond_within,
 };
 pub use sync::{
     IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, initiate_within, read_open, respond,

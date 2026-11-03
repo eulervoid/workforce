@@ -109,6 +109,24 @@ pub(super) fn draw_detail(
                 cursor,
             });
         }
+        Detail::WorkAt { item, comment } => {
+            let pane = app.work_at.get(&(*item, *comment))?;
+            let Some(InView::WorkAt { title, .. }) = in_view else {
+                return None;
+            };
+            let [line, body] =
+                Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(body);
+            frame.render_widget(
+                Paragraph::new(Line::from(title.clone()).themed(theme::text_dimmed())),
+                line,
+            );
+            let (top, cursor) = draw_diff::draw_diff(frame, app, pane, body);
+            return Some(DrawnDetail::Diff {
+                area: body,
+                top,
+                cursor,
+            });
+        }
     };
     spots.extend(links::find(
         frame.buffer_mut(),

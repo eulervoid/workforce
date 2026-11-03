@@ -400,7 +400,13 @@ async fn turns(
         import_progress(daemon, loaded, run, &mut imported).await;
         if run.role == SessionRole::Work {
             daemon
-                .snapshot_work(run.workforce, run.item, run.session, SnapshotPoint::TurnEnd)
+                .snapshot_work(
+                    run.workforce,
+                    loaded,
+                    run.item,
+                    run.session,
+                    SnapshotPoint::TurnEnd,
+                )
                 .await;
         }
 

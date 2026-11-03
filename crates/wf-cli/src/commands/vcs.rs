@@ -2,12 +2,12 @@
 
 use anyhow::bail;
 use serde::Serialize;
-use wf_core::id::{HashId, ItemId};
+use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::identity::DeviceKey;
 use wf_core::review::ReviewStatus;
-use wf_core::session::{CommitId, SessionRole};
-use wf_daemon::proto::LiveDiff;
-use wf_net::DiffAnswer;
+use wf_core::session::{CommitId, GitOid, SessionRole};
+use wf_daemon::proto::{LiveDiff, SnapshotDiff};
+use wf_net::{DiffAnswer, Uncommitted, WorkAt};
 
 use super::emit;
 use super::item::{Scope, choose_item};
@@ -25,16 +25,38 @@ struct DiffView {
     /// What the commits of the work change; `None` while the branch has no commits ahead of the
     /// target, empty when its commits change nothing.
     committed: Option<String>,
+    /// What the files of the agent repository change against `commit`, as the latest snapshot of
+    /// the live work session shows them; absent without one, empty when they change nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uncommitted: Option<String>,
 }
 
 const NO_COMMITS: &str = "the agent has not made any commits";
 
-/// The text of a diff: what the commits change, or that there are none.
-fn diff_text(committed: Option<&str>) -> String {
-    match committed {
+/// The text of the two parts of a diff: what the commits change, or that there are none, then
+/// what is uncommitted under a header of its own, when a snapshot was read.
+fn diff_text(committed: Option<&str>, uncommitted: Option<&str>, head: &str) -> String {
+    let mut text = match committed {
         Some(diff) => diff.to_owned(),
         None => format!("{NO_COMMITS}\n"),
+    };
+    if let Some(diff) = uncommitted {
+        text.push_str(&uncommitted_text(diff, head));
     }
+    text
+}
+
+/// The uncommitted part of a diff under its header, `head` the commit it is against.
+fn uncommitted_text(diff: &str, head: &str) -> String {
+    let diff = if diff.is_empty() {
+        "no changes\n"
+    } else {
+        diff
+    };
+    format!(
+        "\nuncommitted, against {}\n{diff}",
+        wf_core::session::short_commit(head)
+    )
 }
 
 /// The work on an item: once merged, the merge that brought it into the target; before, the head
@@ -64,6 +86,39 @@ pub(crate) fn item_work(
     }
 }
 
+/// The latest snapshot of the live work session of `id` when it runs on this device: the tree of
+/// the uncommitted part of its work. `None` without one.
+pub(crate) fn snapshot_here(workspace: &Workspace, id: ItemId) -> anyhow::Result<Option<GitOid>> {
+    let Some(session) = workspace
+        .state()
+        .holder(id, &SessionRole::Work)
+        .filter(|session| session.device() == workspace.device_key())
+    else {
+        return Ok(None);
+    };
+    let workforce_directory = workspace.data.workforce(&workspace.workforce());
+    Ok(wf_vcs::latest_snapshot(
+        &workforce_directory,
+        id,
+        session.id(),
+    )?)
+}
+
+/// The uncommitted part of the work on `id` at `snapshot`, a snapshot of this device, against
+/// `head`.
+pub(crate) fn uncommitted_here(
+    workspace: &Workspace,
+    id: ItemId,
+    head: CommitId,
+    snapshot: GitOid,
+) -> anyhow::Result<Uncommitted> {
+    let workforce_directory = workspace.data.workforce(&workspace.workforce());
+    Ok(Uncommitted {
+        snapshot,
+        diff: wf_vcs::snapshot_diff(&workforce_directory, id, head, snapshot)?,
+    })
+}
+
 /// What the work on an item changes, and where it was read.
 pub(crate) enum ItemDiff {
     /// Read from the branch in this repository.
@@ -75,19 +130,20 @@ pub(crate) enum ItemDiff {
 /// What the device of the session of an item came to when it was asked.
 pub(crate) enum DeviceDiff {
     Work(wf_net::Work),
-    /// The head is still the one the caller last had.
+    /// The work is still where the caller last had it.
     Unchanged,
     /// The device could not be asked.
     Unreachable(String),
 }
 
 /// The changes of `id`: those of its live session when it runs on another device, asked of that
-/// device with `since`, the head of the answer the caller last had; otherwise [`item_work`].
+/// device with `since`, where the work was in the answer the caller last had; otherwise
+/// [`item_work`].
 pub(crate) fn item_diff(
     workspace: &Workspace,
     git: &wf_vcs::GitCli,
     id: ItemId,
-    since: Option<CommitId>,
+    since: Option<WorkAt>,
 ) -> anyhow::Result<ItemDiff> {
     let session_device = workspace
         .state()
@@ -133,6 +189,44 @@ fn device_answer(
     }
 }
 
+/// The work on `id` at the snapshot `comment` shows (SPEC §10), from the device of the session
+/// that took it: against the target, committed and uncommitted apart. `None` when the comment
+/// shows none.
+pub(crate) fn comment_work(
+    workspace: &Workspace,
+    id: ItemId,
+    comment: CommentId,
+) -> anyhow::Result<Option<wf_net::Work>> {
+    let Some(at) = workspace.state().comment_snapshot(id, comment) else {
+        return Ok(None);
+    };
+    let Some(diff) = workspace.snapshot_diff(id, at)? else {
+        bail!("the work at a comment is read through the daemon, which is not running");
+    };
+    let label = |device| crate::view::device_label(workspace.state(), device);
+    match diff {
+        SnapshotDiff::Answer(DiffAnswer::Work(work)) => Ok(Some(work)),
+        SnapshotDiff::Answer(DiffAnswer::NotHere) => bail!(
+            "the device of the session, {}, has no snapshot of the work at this comment",
+            workspace
+                .state()
+                .session(at.session())
+                .map(|session| label(session.device()))
+                .unwrap_or_default()
+        ),
+        SnapshotDiff::Answer(DiffAnswer::TooLarge) => {
+            bail!("the work at this comment is too large to show from its device")
+        }
+        SnapshotDiff::Answer(DiffAnswer::Unchanged) => {
+            bail!("the device answered that nothing changed, which was not asked")
+        }
+        SnapshotDiff::Unreachable { device, reason } => bail!(
+            "the session ran on {}, which cannot be reached: {reason}",
+            label(device)
+        ),
+    }
+}
+
 fn target(workspace: &Workspace) -> String {
     workspace
         .state()
@@ -159,9 +253,26 @@ pub(super) fn diff(
         }
     };
     let has_commits = git.has_commits(&work)?;
+    let snapshot = match (&work, snapshot_here(workspace, id)?) {
+        (wf_vcs::Work::Unmerged { commit, .. }, Some(snapshot)) => Some((*commit, snapshot)),
+        (wf_vcs::Work::Unmerged { .. } | wf_vcs::Work::Merged { .. }, _) => None,
+    };
+    let workforce_directory = workspace.data.workforce(&workspace.workforce());
     match mode {
+        // Both parts through git, with the same arguments and pager, one after the other.
         Mode::Interactive if has_commits => {
             git.show_diff(&work, git_args, wf_vcs::Pager::AsConfigured)?;
+            if let Some((head, snapshot)) = snapshot {
+                println!("\nuncommitted, against {}", head.short());
+                wf_vcs::show_snapshot_diff(
+                    &workforce_directory,
+                    id,
+                    head,
+                    snapshot,
+                    git_args,
+                    wf_vcs::Pager::AsConfigured,
+                )?;
+            }
             Ok(())
         }
         Mode::Interactive | Mode::Scripted => {
@@ -178,10 +289,66 @@ pub(super) fn diff(
                 } else {
                     None
                 },
+                uncommitted: match snapshot {
+                    Some((head, snapshot)) => Some(wf_vcs::snapshot_diff_with(
+                        &workforce_directory,
+                        id,
+                        head,
+                        snapshot,
+                        git_args,
+                    )?),
+                    None => None,
+                },
             };
-            emit(json, &view, |view| diff_text(view.committed.as_deref()))
+            emit(json, &view, |view| {
+                diff_text(
+                    view.committed.as_deref(),
+                    view.uncommitted.as_deref(),
+                    &view.commit,
+                )
+            })
         }
     }
+}
+
+/// `wf item diff --at <comment>`: the work at the snapshot the comment shows, as its session's
+/// device has it. Git's own options and pager do not apply to a diff read there.
+pub(super) fn diff_at(
+    json: bool,
+    workspace: &Workspace,
+    id: ItemId,
+    comment: &str,
+) -> anyhow::Result<()> {
+    let comments: Vec<CommentId> = match workspace.state().item(id) {
+        Some(wf_core::item::ItemEntry::Live(item)) => item.comments().keys().copied().collect(),
+        Some(wf_core::item::ItemEntry::Archived(_)) | None => Vec::new(),
+    };
+    let comment = wf_core::id::resolve_prefix(comment, comments)?;
+    let Some(work) = comment_work(workspace, id, comment)? else {
+        bail!(
+            "comment {} of #{} shows no work: only a comment by a work session, or one that \
+             resolves a blocker a work session parked on, has a snapshot of it",
+            comment.short(),
+            id.short()
+        );
+    };
+    let view = DiffView {
+        item: id.to_base32(),
+        device: None,
+        commit: work.head.to_string(),
+        merge: None,
+        committed: Some(work.committed.clone()),
+        uncommitted: work.uncommitted.map(|uncommitted| uncommitted.diff),
+    };
+    emit(json, &view, |view| {
+        let committed = view.committed.as_deref().unwrap_or_default();
+        format!(
+            "the work at comment {}, committed against {}\n{}",
+            comment.short(),
+            work.target,
+            diff_text(Some(committed), view.uncommitted.as_deref(), &view.commit)
+        )
+    })
 }
 
 /// Prints the diff read from the device of the session, saying which device it came from. Git's
@@ -208,16 +375,20 @@ fn device_view(
 ) -> anyhow::Result<(DiffView, String)> {
     match diff {
         DeviceDiff::Work(work) => {
+            let head = work.head.to_string();
+            let uncommitted = work.uncommitted.map(|uncommitted| uncommitted.diff);
             let text = format!(
                 "committed on {label}, against {}\n{}",
-                work.target, work.committed
+                work.target,
+                diff_text(Some(&work.committed), uncommitted.as_deref(), &head)
             );
             let view = DiffView {
                 item: id.to_base32(),
                 device: Some(device.to_string()),
-                commit: work.head.to_string(),
+                commit: head,
                 merge: None,
                 committed: Some(work.committed),
+                uncommitted,
             };
             Ok((view, text))
         }
@@ -332,6 +503,7 @@ mod tests {
             target: "main".to_owned(),
             head: commit(),
             committed: "diff --git a/f b/f\n".to_owned(),
+            uncommitted: None,
         };
         let (view, text) = device_view(id, device(), "laptop", DeviceDiff::Work(work)).unwrap();
         assert_eq!(view.device, Some(device().to_string()));
@@ -345,6 +517,27 @@ mod tests {
         let json = serde_json::to_value(&view).unwrap();
         assert_eq!(json["device"], device().to_string());
         assert_eq!(json["committed"], "diff --git a/f b/f\n");
+    }
+
+    #[test]
+    fn the_uncommitted_part_of_a_device_follows_the_committed_one_under_its_header() {
+        let id = ItemId::from_bytes([2; 32]);
+        let work = Work {
+            target: "main".to_owned(),
+            head: commit(),
+            committed: "diff --git a/f b/f\n".to_owned(),
+            uncommitted: Some(Uncommitted {
+                snapshot: GitOid::from_bytes([3; 20]),
+                diff: "diff --git a/g b/g\n".to_owned(),
+            }),
+        };
+        let (view, text) = device_view(id, device(), "laptop", DeviceDiff::Work(work)).unwrap();
+        assert_eq!(view.uncommitted.as_deref(), Some("diff --git a/g b/g\n"));
+        assert_eq!(
+            text,
+            "committed on laptop, against main\ndiff --git a/f b/f\n\nuncommitted, against \
+             a8d49484\ndiff --git a/g b/g\n"
+        );
     }
 
     #[test]
@@ -373,6 +566,7 @@ mod tests {
             target: "main".to_owned(),
             head: commit(),
             committed: "diff --git a/f b/f\n".to_owned(),
+            uncommitted: None,
         };
         let shown = device_answer(
             id,

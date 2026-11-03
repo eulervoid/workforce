@@ -18,15 +18,15 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::lifecycle::Finish;
 use wf_core::name::{AgentName, ReviewStepName};
-use wf_core::session::CommitId;
+use wf_core::session::CommentSnapshot;
 use wf_harness::Permission;
-use wf_net::DiffAnswer;
 use wf_net::frame::{FrameError, blocking as frame};
+use wf_net::{DiffAnswer, WorkAt};
 
 use crate::caller::{Caller, Token};
 use crate::founding::Founding;
 
-pub const PROTOCOL_VERSION: u32 = 30;
+pub const PROTOCOL_VERSION: u32 = 31;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -158,12 +158,12 @@ pub enum Call {
     /// against the budget of the machine config, as `Option<CacheUsage>`; `None` without a budget.
     CacheUsage,
     /// The work of an item as the device of its live work session shows it, for the principal;
-    /// answered with a [`LiveDiff`]. `since` is the head of the last answer, which an unchanged
-    /// head is answered with [`DiffAnswer::Unchanged`].
-    LiveDiff {
-        item: ItemId,
-        since: Option<CommitId>,
-    },
+    /// answered with a [`LiveDiff`]. `since` is where the work was in the last answer, which work
+    /// still there is answered with [`DiffAnswer::Unchanged`].
+    LiveDiff { item: ItemId, since: Option<WorkAt> },
+    /// The work on an item at the snapshot a comment shows, as the device of the snapshot's
+    /// session has it, for the principal; answered with a [`SnapshotDiff`].
+    SnapshotDiff { item: ItemId, at: CommentSnapshot },
     /// The commit the target branch is at, for the session to rebase its work onto before it
     /// submits; answered with a `CommitId`.
     TargetCommit,
@@ -184,6 +184,15 @@ pub enum LiveDiff {
     Answer(DiffAnswer),
     /// The item has no live work session.
     NoSession,
+    /// The device of the session could not be asked.
+    Unreachable { device: DeviceKey, reason: String },
+}
+
+/// What a [`Call::SnapshotDiff`] came to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SnapshotDiff {
+    /// The device of the session answered, or this one did when the session ran here.
+    Answer(DiffAnswer),
     /// The device of the session could not be asked.
     Unreachable { device: DeviceKey, reason: String },
 }
@@ -256,6 +265,7 @@ mod tests {
     use wf_core::claims::Presence;
     use wf_core::id::EventId;
     use wf_core::identity::DeviceSigner;
+    use wf_core::session::CommitId;
     use wf_core::testing::{golden_forking_state, golden_state};
 
     use super::*;
@@ -295,12 +305,24 @@ mod tests {
             used_bytes: 10,
             budget_bytes: 20,
         });
+        let work = wf_net::Work {
+            target: "main".into(),
+            head: CommitId::Git("0123456789abcdef0123456789abcdef01234567".parse().unwrap()),
+            committed: "diff --git a/f b/f\n".into(),
+            uncommitted: Some(wf_net::Uncommitted {
+                snapshot: "89abcdef0123456789abcdef0123456789abcdef".parse().unwrap(),
+                diff: "diff --git a/g b/g\n".into(),
+            }),
+        };
+        let snapshot_diffs = vec![
+            SnapshotDiff::Answer(DiffAnswer::Work(work.clone())),
+            SnapshotDiff::Unreachable {
+                device,
+                reason: "timed out".into(),
+            },
+        ];
         let live_diffs = vec![
-            LiveDiff::Answer(DiffAnswer::Work(wf_net::Work {
-                target: "main".into(),
-                head: CommitId::Git("0123456789abcdef0123456789abcdef01234567".parse().unwrap()),
-                committed: "diff --git a/f b/f\n".into(),
-            })),
+            LiveDiff::Answer(DiffAnswer::Work(work)),
             LiveDiff::NoSession,
             LiveDiff::Unreachable {
                 device,
@@ -337,6 +359,10 @@ mod tests {
             (
                 "LiveDiff",
                 encoding::encode(&Reply::Ok(live_diffs)).unwrap(),
+            ),
+            (
+                "SnapshotDiff",
+                encoding::encode(&Reply::Ok(snapshot_diffs)).unwrap(),
             ),
             (
                 "FollowTranscript",
@@ -390,6 +416,7 @@ mod tests {
             Call::MachineFaults => "MachineFaults",
             Call::CacheUsage => "CacheUsage",
             Call::LiveDiff { .. } => "LiveDiff",
+            Call::SnapshotDiff { .. } => "SnapshotDiff",
             Call::TargetCommit => "TargetCommit",
             Call::AwaitedCommits => "AwaitedCommits",
             Call::FollowTranscript(_) => "FollowTranscript",
@@ -397,7 +424,7 @@ mod tests {
     }
 
     /// The number of arms of [`golden_name`].
-    const CALL_VARIANTS: usize = 22;
+    const CALL_VARIANTS: usize = 23;
 
     /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
     /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
@@ -460,9 +487,19 @@ mod tests {
             Call::CacheUsage,
             Call::LiveDiff {
                 item,
-                since: Some(CommitId::Git(
-                    "0123456789abcdef0123456789abcdef01234567".parse().unwrap(),
-                )),
+                since: Some(wf_net::WorkAt {
+                    head: CommitId::Git(
+                        "0123456789abcdef0123456789abcdef01234567".parse().unwrap(),
+                    ),
+                    snapshot: Some("89abcdef0123456789abcdef0123456789abcdef".parse().unwrap()),
+                }),
+            },
+            Call::SnapshotDiff {
+                item,
+                at: CommentSnapshot::Parked {
+                    session: SessionId::from_bytes([3; 32]),
+                    blocker: wf_core::id::CommentId::from_bytes([5; 32]),
+                },
             },
             Call::TargetCommit,
             Call::AwaitedCommits,
@@ -527,7 +564,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_REQUESTS: [(&str, usize, &str); 23] = [
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 24] = [
         (
             "State",
             35,
@@ -620,23 +657,28 @@ mod tests {
         ),
         (
             "LiveDiff",
-            91,
-            "jmzajanqeh27qotsb7udp2bzorfkm65yysvld2cnyy57cjprq35a",
+            113,
+            "wtinq73scee7wk3m7mw5m5nomobouo6m33jobi4eh3yutqfyg44a",
+        ),
+        (
+            "SnapshotDiff",
+            135,
+            "7tcmqcvqbhlgdheb6dkpgpvbj3e2lov7z2o6ncgyvh5tfeh5codq",
         ),
         (
             "TargetCommit",
             35,
-            "luwmxbxdflupedlbnwiuwqemneykdjdxmvj3vamvihsavoz7fhua",
+            "ebl37w4odxja5pqu7px6r4gsc2ltzjorcn5mka7d6mulbpubyd6a",
         ),
         (
             "AwaitedCommits",
             35,
-            "ebl37w4odxja5pqu7px6r4gsc2ltzjorcn5mka7d6mulbpubyd6a",
+            "vpvwnstae4oyda2qpbspvknkkb6odaxhm6htn726vywkmmdx5qyq",
         ),
         (
             "FollowTranscript",
             68,
-            "4ewoqlqx6hmqqilec5h5x6pbo5m5dx6sginkfslv2d3fvgdzizva",
+            "ji2lzas77zbg7utiivmnfndv52mphfxwv6f32t2oscnq2n7rvuoa",
         ),
         (
             "Found",
@@ -645,8 +687,8 @@ mod tests {
         ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 30;
-    const GOLDEN_REPLIES: [(&str, usize, &str); 9] = [
+    const GOLDEN_PROTOCOL_VERSION: u32 = 31;
+    const GOLDEN_REPLIES: [(&str, usize, &str); 10] = [
         (
             "State",
             20911,
@@ -679,8 +721,13 @@ mod tests {
         ),
         (
             "LiveDiff",
-            96,
-            "ehkn7afzf5poajq3wkx5kagr5zpy4c5ltaovawkaeypjm4lx2u5a",
+            138,
+            "57bszhealnxdvw4g7c55wy3ozxnb2wu6r3fxjwopbd4kb7zu3mcq",
+        ),
+        (
+            "SnapshotDiff",
+            137,
+            "c73yg5giu3d5ren5vbeo757mf6gy3mh6jy6d3nfvlbgimpzgk6jq",
         ),
         (
             "FollowTranscript",

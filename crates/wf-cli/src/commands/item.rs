@@ -17,7 +17,7 @@ use wf_core::state::State;
 use wf_core::validate::OneOf;
 
 use super::comment::comment_why;
-use super::vcs::{checkout, diff, path};
+use super::vcs::{checkout, diff, diff_at, path};
 use super::{Done, done, edit_until_valid, emit, emit_paged};
 use crate::cli::*;
 use crate::draft::{Draft, NewItemDraft};
@@ -267,7 +267,7 @@ pub(super) fn item(
             move_items(json, mode, workspace, args, ItemState::Cancelled)
         }
         ItemCommand::Link(args) => link(json, mode, workspace, args),
-        ItemCommand::Diff { item, git_args } => {
+        ItemCommand::Diff { item, at, git_args } => {
             // `--json` after the item is wf's, not git's, though clap passes it on.
             let (json_flags, mut git_args): (Vec<String>, Vec<String>) =
                 git_args.into_iter().partition(|arg| arg == "--json");
@@ -278,7 +278,10 @@ pub(super) fn item(
             let json = json || !json_flags.is_empty();
             let mode = if json { Mode::Scripted } else { mode };
             let id = choose_item(workspace, mode, item, Scope::Live)?;
-            diff(json, mode, workspace, id, &git_args)
+            match at {
+                Some(comment) => diff_at(json, workspace, id, &comment),
+                None => diff(json, mode, workspace, id, &git_args),
+            }
         }
         ItemCommand::Checkout { item } => checkout(json, mode, workspace, item),
         ItemCommand::Path { item } => path(json, mode, workspace, item),

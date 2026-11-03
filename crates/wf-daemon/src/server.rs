@@ -136,6 +136,7 @@ async fn answer_call(
         | Call::MachineFaults
         | Call::CacheUsage
         | Call::LiveDiff { .. }
+        | Call::SnapshotDiff { .. }
         | Call::TargetCommit
         | Call::AwaitedCommits
         | Call::FollowTranscript(_) => daemon.workforce(workforce).await,
@@ -200,6 +201,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         Call::StopSession(_) => principals("stop sessions"),
         Call::AnswerPermission { .. } => principals("answer permission requests"),
         Call::LiveDiff { .. } => principals("ask for a live diff"),
+        Call::SnapshotDiff { .. } => principals("ask for the work at a comment"),
         Call::FollowTranscript(_) => principals("follow the transcripts of other devices"),
     }
 }
@@ -386,6 +388,13 @@ async fn call(
         Call::LiveDiff { item, since } => {
             let diff = daemon
                 .live_diff(workforce, item, since)
+                .await
+                .map_err(|error| wf_core::error_chain(&error))?;
+            reply(diff)
+        }
+        Call::SnapshotDiff { item, at } => {
+            let diff = daemon
+                .snapshot_diff(workforce, item, at)
                 .await
                 .map_err(|error| wf_core::error_chain(&error))?;
             reply(diff)

@@ -79,6 +79,7 @@ pub const ITEM: Hint = Hint::key("i", KeyCode::Char('i'), "item");
 pub const NEXT_SESSION: Hint = Hint::key("n", KeyCode::Char('n'), "next session");
 pub const FULL: Hint = Hint::key("f", KeyCode::Char('f'), "full");
 pub const OPEN_DIFF: Hint = Hint::key("l", KeyCode::Char('l'), "diff");
+pub const WORK_AT: Hint = Hint::key("w", KeyCode::Char('w'), "work at");
 pub const SELECT: Hint = Hint::key("v", KeyCode::Char('v'), "select");
 pub const COMMENT: Hint = Hint::key("c", KeyCode::Char('c'), "comment");
 pub const CHANGE: Hint = Hint::key("r", KeyCode::Char('r'), "change");
@@ -146,6 +147,7 @@ pub const HELP: &[Section] = &[
             Hint::keys("labels", "type to search, enter marks or creates"),
             Hint::keys("", "enter with no text applies, esc drops"),
             Hint::keys("D", "the diff"),
+            Hint::keys("w", "the work at a comment"),
         ],
     },
     Section {

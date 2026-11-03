@@ -186,6 +186,10 @@ impl App {
             KeyCode::Char('s') => {
                 Acted::from(self.item_subject().map(|item| Effect::ChooseStart { item }))
             }
+            KeyCode::Char('w') => Acted::from(
+                self.item_subject()
+                    .map(|item| Effect::ChooseWorkAt { item }),
+            ),
             KeyCode::Char(key @ ('e' | 'm' | 'p')) => {
                 let field = match key {
                     'e' => Field::Text,
@@ -229,9 +233,13 @@ impl App {
             Some(InView::Session { successor, .. }) => {
                 (None, successor.as_ref().map(|successor| successor.id))
             }
-            Some(InView::Agent { .. } | InView::Flag { .. } | InView::Diff { .. }) | None => {
-                (None, None)
-            }
+            Some(
+                InView::Agent { .. }
+                | InView::Flag { .. }
+                | InView::Diff { .. }
+                | InView::WorkAt { .. },
+            )
+            | None => (None, None),
         };
         let item_of_session = self.item_subject();
         let page = self.page();
@@ -260,6 +268,17 @@ impl App {
         {
             let item = *item;
             return self.diff_key(item, key);
+        }
+        // The work at a comment is only read: the keys move in it and fold its files.
+        if let Some(Opened {
+            detail: Detail::WorkAt { .. },
+            ..
+        }) = self.stack().last()
+        {
+            if let Some(pane) = self.diff_on_top_mut() {
+                pane.key(key, page);
+            }
+            return None;
         }
         // The keys that scroll a text move the cursor of a transcript.
         if let Some(Opened {

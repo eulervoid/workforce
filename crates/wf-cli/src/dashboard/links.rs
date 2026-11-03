@@ -19,7 +19,8 @@ struct Word {
 
 /// The links on the rows of `area` as drawn into `buffer`. A comment id or a commit is about
 /// `item`, the item of the text, or else an item linked on the same row. A link to `shown`, what
-/// the text is about, is left out.
+/// the text is about, is left out; in the detail of an item, the id of one of its comments that
+/// shows work links to the work at it.
 pub fn find(
     buffer: &Buffer,
     area: Rect,
@@ -41,7 +42,7 @@ pub fn find(
                     .checked_sub(back)
                     .map(|index| words[index].text.as_str())
             };
-            let Some(target) = resolve(word, before(1), before(2), &about, links) else {
+            let Some(target) = resolve(word, before(1), before(2), &about, shown, links) else {
                 continue;
             };
             if matches!(&target, Target::Open { detail, .. } if Some(detail) == shown) {
@@ -104,6 +105,7 @@ fn resolve(
     previous: Option<&str>,
     before_previous: Option<&str>,
     about: &[ItemId],
+    shown: Option<&Detail>,
     links: &Links,
 ) -> Option<Target> {
     let text = word.text.as_str();
@@ -130,6 +132,17 @@ fn resolve(
         let item = about
             .iter()
             .find(|item| links.comments.contains(&(**item, text.to_owned())))?;
+        if shown == Some(&Detail::Item(*item))
+            && let Some(comment) = links.with_work.get(&(*item, text.to_owned()))
+        {
+            return Some(Target::Open {
+                detail: Detail::WorkAt {
+                    item: *item,
+                    comment: *comment,
+                },
+                name: text.to_owned(),
+            });
+        }
         return Some(Target::Open {
             detail: Detail::Item(*item),
             name: format!("#{}", item.short()),

@@ -69,6 +69,14 @@ pub fn carry_out(
             workspace.state(),
             item,
         )?))),
+        Effect::ChooseWorkAt { item } => {
+            let events = workspace.item_events(&[item])?;
+            Ok(Outcome::Ask(Prompt::Choose(comments_with_work(
+                workspace.state(),
+                &events,
+                item,
+            )?)))
+        }
         Effect::Edit { item, field } => edit(workspace, terminal, item, field),
         Effect::Change { item, changes } => change(workspace, item, changes).map(Outcome::Did),
         Effect::Approve {
@@ -216,6 +224,59 @@ fn states(state: &State, item: ItemId) -> anyhow::Result<Choice> {
     Ok(Choice::State {
         item,
         states,
+        index: 0,
+    })
+}
+
+/// The comments of `item` that show the work at a snapshot ([`State::comment_snapshot`]), the
+/// newest first, each with who wrote it and the first line of its text, read from `events`.
+pub(super) fn comments_with_work(
+    state: &State,
+    events: &[wf_core::event::Event],
+    item: ItemId,
+) -> anyhow::Result<Choice> {
+    let live = live(state, item)?;
+    let first_line = |comment: CommentId| {
+        events
+            .iter()
+            .find(|event| CommentId::from(event.id()) == comment)
+            .and_then(|event| {
+                let EventBody::Commented(commented) = &event.content.body else {
+                    return None;
+                };
+                commented.text.lines().next()
+            })
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let mut shown: Vec<(&CommentId, &wf_core::item::Comment)> = live
+        .comments()
+        .iter()
+        .filter(|(comment, _)| state.comment_snapshot(item, **comment).is_some())
+        .collect();
+    shown.sort_by_key(|(comment, folded)| std::cmp::Reverse((folded.at, **comment)));
+    if shown.is_empty() {
+        bail!(
+            "no comment of #{} shows work: only those by its work sessions, and answers to \
+             their blockers, do",
+            item.short()
+        );
+    }
+    let comments = shown
+        .into_iter()
+        .map(|(comment, folded)| {
+            let label = format!(
+                "{}  {}  {}",
+                comment.short(),
+                state.actor_label(&folded.by),
+                first_line(*comment)
+            );
+            (*comment, label)
+        })
+        .collect();
+    Ok(Choice::WorkAt {
+        item,
+        comments,
         index: 0,
     })
 }

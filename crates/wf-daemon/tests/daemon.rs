@@ -774,11 +774,12 @@ fn give_work(
 ) -> wf_core::session::CommitId {
     let data_dir = DataDir::new(directory.to_path_buf());
     let workforce_directory = data_dir.workforce(&workforce);
-    // The test repository stands in for the workforce's bare repository, which the daemon made
-    // empty when it loaded the workforce.
+    // The git directory of the test repository stands in for the workforce's bare repository,
+    // which the daemon made empty when it loaded the workforce, so that the objects are where a
+    // snapshot repository finds them.
     let bare = wf_vcs::bare_repository(&workforce_directory);
     std::fs::remove_dir_all(&bare).unwrap();
-    std::os::unix::fs::symlink(repository.directory(), bare).unwrap();
+    std::os::unix::fs::symlink(repository.directory().join(".git"), bare).unwrap();
     let agent_repository = wf_vcs::item_repository(&workforce_directory, item);
     repository.prepare_worktree(&wf_vcs::item_branch(item), &agent_repository, "main");
     repository.write(&agent_repository, "live.txt", "work in progress\n");
@@ -812,10 +813,57 @@ async fn live_diff(
     socket: &Path,
     workforce: wf_core::id::WorkforceId,
     item: wf_core::id::ItemId,
-    since: Option<wf_core::session::CommitId>,
+    since: Option<wf_net::WorkAt>,
 ) -> wf_daemon::proto::LiveDiff {
     let socket = socket.to_path_buf();
     blocking(move || connect(&socket).live_diff(workforce, item, since).unwrap()).await
+}
+
+async fn snapshot_diff(
+    socket: &Path,
+    workforce: wf_core::id::WorkforceId,
+    item: wf_core::id::ItemId,
+    at: wf_core::session::CommentSnapshot,
+) -> wf_daemon::proto::SnapshotDiff {
+    let socket = socket.to_path_buf();
+    blocking(move || connect(&socket).snapshot_diff(workforce, item, at).unwrap()).await
+}
+
+/// Writes `notes.md` in the agent repository of `item` without committing it, and has the daemon
+/// of `directory` record a snapshot of it for `session` as it does at a comment: in the snapshot
+/// repository and as an entry of the session's transcript (SPEC §10) that names `comment`.
+/// Returns the tree of the snapshot.
+fn snapshot_at_comment(
+    directory: &Path,
+    workforce: wf_core::id::WorkforceId,
+    item: wf_core::id::ItemId,
+    session: wf_core::id::SessionId,
+    comment: wf_core::id::CommentId,
+    head: wf_core::session::CommitId,
+) -> wf_core::session::GitOid {
+    use wf_core::id::HashId;
+
+    let data_dir = DataDir::new(directory.to_path_buf());
+    let workforce_directory = data_dir.workforce(&workforce);
+    let agent_repository = wf_vcs::item_repository(&workforce_directory, item);
+    std::fs::write(agent_repository.join("notes.md"), "draft\n").unwrap();
+    let snapshot = wf_vcs::take_snapshot(&workforce_directory, item, session).unwrap();
+    wf_vcs::record_snapshot(&workforce_directory, item, session, snapshot.tree).unwrap();
+    let entry = serde_json::json!({
+        "at": "2026-11-03T12:00:00Z",
+        "direction": "wf",
+        "message": {
+            "snapshot": snapshot.tree.to_string(),
+            "head": head.to_string(),
+            "at": "comment",
+            "comment": comment.to_base32(),
+            "left_out": [],
+        },
+    });
+    let transcript = data_dir.transcript(&workforce, session);
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, format!("{entry}\n")).unwrap();
+    snapshot.tree
 }
 
 #[tokio::test]
@@ -854,9 +902,47 @@ async fn a_session_on_this_device_is_answered_from_its_agent_repository() {
     };
     assert_eq!((work.target.as_str(), work.head), ("main", head));
     assert!(work.committed.contains("+work in progress"));
+    assert_eq!(work.uncommitted, None, "the session took no snapshot yet");
     assert_eq!(
-        live_diff(&running.socket, workforce, item, Some(head)).await,
+        live_diff(&running.socket, workforce, item, Some(work.at())).await,
         LiveDiff::Answer(DiffAnswer::Unchanged)
+    );
+
+    // A snapshot moves the work though the head stays: its uncommitted part is the snapshot.
+    let session = work_session(&running.socket, workforce, item).await;
+    let comment = wf_core::id::CommentId::from_bytes([7; 32]);
+    let directory = running._directory.path();
+    let tree = snapshot_at_comment(directory, workforce, item, session, comment, head);
+    let LiveDiff::Answer(DiffAnswer::Work(snapshotted)) =
+        live_diff(&running.socket, workforce, item, Some(work.at())).await
+    else {
+        panic!("a new snapshot is new work");
+    };
+    let uncommitted = snapshotted
+        .uncommitted
+        .clone()
+        .expect("the uncommitted part");
+    assert_eq!((snapshotted.head, uncommitted.snapshot), (head, tree));
+    assert!(uncommitted.diff.contains("+draft"), "{}", uncommitted.diff);
+    assert!(!uncommitted.diff.contains("work in progress"));
+    assert_eq!(
+        live_diff(&running.socket, workforce, item, Some(snapshotted.at())).await,
+        LiveDiff::Answer(DiffAnswer::Unchanged)
+    );
+
+    // The work at the comment, answered here.
+    let at = wf_core::session::CommentSnapshot::Taken { session, comment };
+    assert_eq!(
+        snapshot_diff(&running.socket, workforce, item, at).await,
+        wf_daemon::proto::SnapshotDiff::Answer(DiffAnswer::Work(snapshotted.clone()))
+    );
+    let elsewhere = wf_core::session::CommentSnapshot::Taken {
+        session,
+        comment: wf_core::id::CommentId::from_bytes([8; 32]),
+    };
+    assert_eq!(
+        snapshot_diff(&running.socket, workforce, item, elsewhere).await,
+        wf_daemon::proto::SnapshotDiff::Answer(DiffAnswer::NotHere)
     );
 
     // The branch and the agent repository are gone, as after the session ended.
@@ -876,7 +962,7 @@ async fn a_session_on_this_device_is_answered_from_its_agent_repository() {
 }
 
 #[tokio::test]
-async fn a_device_reads_the_committed_work_of_a_session_on_another() {
+async fn a_device_reads_the_work_of_a_session_on_another_and_the_work_at_its_comment() {
     use wf_daemon::proto::LiveDiff;
     use wf_net::DiffAnswer;
 
@@ -914,6 +1000,10 @@ async fn a_device_reads_the_committed_work_of_a_session_on_another() {
     }
     assert!(known, "the laptop learns of the vm's session");
 
+    let session = work_session(&vm_socket, workforce, item).await;
+    let comment = wf_core::id::CommentId::from_bytes([7; 32]);
+    let tree = snapshot_at_comment(vm_dir.path(), workforce, item, session, comment, head);
+
     let LiveDiff::Answer(DiffAnswer::Work(work)) =
         live_diff(&laptop_socket, workforce, item, None).await
     else {
@@ -921,9 +1011,19 @@ async fn a_device_reads_the_committed_work_of_a_session_on_another() {
     };
     assert_eq!((work.target.as_str(), work.head), ("main", head));
     assert!(work.committed.contains("+work in progress"));
+    let uncommitted = work.uncommitted.clone().expect("the uncommitted part");
+    assert_eq!(uncommitted.snapshot, tree);
+    assert!(uncommitted.diff.contains("+draft"), "{}", uncommitted.diff);
     assert_eq!(
-        live_diff(&laptop_socket, workforce, item, Some(head)).await,
+        live_diff(&laptop_socket, workforce, item, Some(work.at())).await,
         LiveDiff::Answer(DiffAnswer::Unchanged)
+    );
+
+    // The laptop asks the vm for the work at the comment of its session.
+    let at = wf_core::session::CommentSnapshot::Taken { session, comment };
+    assert_eq!(
+        snapshot_diff(&laptop_socket, workforce, item, at).await,
+        wf_daemon::proto::SnapshotDiff::Answer(DiffAnswer::Work(work.clone()))
     );
 
     // The branch and the agent repository are gone, as after the session ended.

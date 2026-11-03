@@ -1,5 +1,5 @@
-//! `wf/query/1`: ask the device a session runs on about it: what its agent is changing, and what
-//! its transcript says.
+//! `wf/query/2`: ask the device a session runs on about it: what its agent is changing, what it
+//! had changed when a comment was written, and what its transcript says.
 //!
 //! The initiator sends one [`Query`] and the responder answers with one answer of the type the
 //! request names ([`QueryRequest::Answer`]). A live diff and a transcript are local data nobody
@@ -13,13 +13,13 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use wf_core::id::{ItemId, SessionId, WorkforceId};
-use wf_core::session::CommitId;
+use wf_core::session::{CommentSnapshot, CommitId, GitOid};
 
 use crate::frame::{FrameError, MAX_FRAME_LEN, read_frame_within, write_frame_within};
 use crate::node::SourceError;
 use crate::sync::IDLE_TIMEOUT;
 
-pub const QUERY_ALPN: &[u8] = b"wf/query/1";
+pub const QUERY_ALPN: &[u8] = b"wf/query/2";
 
 /// A request is a few ids; a peer that sends more is not speaking the protocol.
 const REQUEST_FRAME_LEN: u32 = 1024;
@@ -38,16 +38,27 @@ pub const TRANSCRIPT_PART_LEN: usize = 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Query {
     Diff(DiffRequest),
+    Snapshot(SnapshotRequest),
     Transcript(TranscriptRequest),
 }
 
-/// The changes of the work on an item. `since` is the head commit the asker last saw; the answer
-/// is [`DiffAnswer::Unchanged`] while the head is still that one, so polling is one small frame.
+/// The changes of the work on an item. `since` is where the work was in the answer the asker last
+/// saw; the answer is [`DiffAnswer::Unchanged`] while it is still there, so polling is one small
+/// frame.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffRequest {
     pub workforce: WorkforceId,
     pub item: ItemId,
-    pub since: Option<CommitId>,
+    pub since: Option<WorkAt>,
+}
+
+/// The work on an item at the snapshot a comment shows, which the device of the snapshot's
+/// session has in its transcript; answered with a [`DiffAnswer`], never `Unchanged`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotRequest {
+    pub workforce: WorkforceId,
+    pub item: ItemId,
+    pub at: CommentSnapshot,
 }
 
 /// The transcript of a session of the answering device, from byte `from` on: the asker keeps a
@@ -59,7 +70,7 @@ pub struct TranscriptRequest {
     pub from: u64,
 }
 
-/// A request of `wf/query/1` and the answer it gets.
+/// A request of `wf/query/2` and the answer it gets.
 pub trait QueryRequest: Clone + Into<Query> {
     type Answer: DeserializeOwned;
 }
@@ -67,6 +78,12 @@ pub trait QueryRequest: Clone + Into<Query> {
 impl From<DiffRequest> for Query {
     fn from(request: DiffRequest) -> Self {
         Self::Diff(request)
+    }
+}
+
+impl From<SnapshotRequest> for Query {
+    fn from(request: SnapshotRequest) -> Self {
+        Self::Snapshot(request)
     }
 }
 
@@ -80,6 +97,10 @@ impl QueryRequest for DiffRequest {
     type Answer = DiffAnswer;
 }
 
+impl QueryRequest for SnapshotRequest {
+    type Answer = DiffAnswer;
+}
+
 impl QueryRequest for TranscriptRequest {
     type Answer = TranscriptAnswer;
 }
@@ -88,6 +109,7 @@ impl Query {
     pub fn workforce(&self) -> WorkforceId {
         match self {
             Self::Diff(request) => request.workforce,
+            Self::Snapshot(request) => request.workforce,
             Self::Transcript(request) => request.workforce,
         }
     }
@@ -98,14 +120,13 @@ pub enum DiffAnswer {
     /// Nothing moved since `since`.
     Unchanged,
     Work(Work),
-    /// This device has no branch or agent repository of the item.
+    /// This device has no branch or agent repository of the item, or not the snapshot asked for.
     NotHere,
     /// The work is larger than the largest answer; the asker sees it is not a broken connection.
     TooLarge,
 }
 
-/// The changes of the work on an item. What is not committed yet is kept apart from what is, and
-/// is not part of this version of the protocol.
+/// The changes of the work on an item, what is not committed yet kept apart from what is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Work {
     /// The branch the commits are compared against.
@@ -115,6 +136,37 @@ pub struct Work {
     /// The diff of the head commit against the target, as git prints it. The asker parses it
     /// where it needs files.
     pub committed: String,
+    /// What the files of the agent repository changed against the head, as a snapshot of them
+    /// shows; `None` when the session took no snapshot.
+    pub uncommitted: Option<Uncommitted>,
+}
+
+impl Work {
+    pub fn at(&self) -> WorkAt {
+        WorkAt {
+            head: self.head,
+            snapshot: self
+                .uncommitted
+                .as_ref()
+                .map(|uncommitted| uncommitted.snapshot),
+        }
+    }
+}
+
+/// The part of the work that is not committed: a snapshot of the files against the head.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Uncommitted {
+    /// The tree of the snapshot, in the item's snapshot repository on the answering device.
+    pub snapshot: GitOid,
+    /// The diff of the snapshot against the head, as git prints it.
+    pub diff: String,
+}
+
+/// Where the work on an item was in an answer: its head and the snapshot of its uncommitted part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkAt {
+    pub head: CommitId,
+    pub snapshot: Option<GitOid>,
 }
 
 /// What follows byte `from` of a session's transcript.
@@ -158,13 +210,22 @@ impl TranscriptAnswer {
 /// What the responder reads the work and the transcripts of sessions from, which the daemon
 /// implements with git and its transcript files.
 pub trait QuerySource: Send + Sync {
-    /// The answer to a request for the diff of `item`: [`DiffAnswer::Unchanged`] when its head is
-    /// `since`, [`DiffAnswer::NotHere`] when this device has no work on it.
+    /// The answer to a request for the diff of `item`: [`DiffAnswer::Unchanged`] when its work is
+    /// still at `since`, [`DiffAnswer::NotHere`] when this device has no work on it.
     fn diff(
         &self,
         workforce: WorkforceId,
         item: ItemId,
-        since: Option<CommitId>,
+        since: Option<WorkAt>,
+    ) -> n0_future::boxed::BoxFuture<Result<DiffAnswer, SourceError>>;
+
+    /// The answer to a request for the work on `item` at the snapshot `at`:
+    /// [`DiffAnswer::NotHere`] when this device does not have it.
+    fn snapshot(
+        &self,
+        workforce: WorkforceId,
+        item: ItemId,
+        at: CommentSnapshot,
     ) -> n0_future::boxed::BoxFuture<Result<DiffAnswer, SourceError>>;
 
     /// The answer to a request for the transcript of `session` from byte `from`, of at most
@@ -244,12 +305,18 @@ where
                 .diff(workforce, item, since)
                 .await
                 .map_err(QueryError::Source)?;
-            match write_frame_within(&mut stream, &answer, idle).await {
-                Err(FrameError::TooLarge(_)) => {
-                    Ok(write_frame_within(&mut stream, &DiffAnswer::TooLarge, idle).await?)
-                }
-                written => Ok(written?),
-            }
+            write_diff_answer(&mut stream, &answer, idle).await
+        }
+        Query::Snapshot(SnapshotRequest {
+            workforce,
+            item,
+            at,
+        }) => {
+            let answer = source
+                .snapshot(workforce, item, at)
+                .await
+                .map_err(QueryError::Source)?;
+            write_diff_answer(&mut stream, &answer, idle).await
         }
         Query::Transcript(TranscriptRequest {
             workforce,
@@ -262,5 +329,22 @@ where
                 .map_err(QueryError::Source)?;
             Ok(write_frame_within(&mut stream, &answer, idle).await?)
         }
+    }
+}
+
+/// Writes `answer`, or [`DiffAnswer::TooLarge`] when it does not fit a frame.
+async fn write_diff_answer<S>(
+    stream: &mut S,
+    answer: &DiffAnswer,
+    idle: Duration,
+) -> Result<(), QueryError>
+where
+    S: AsyncWrite + Unpin,
+{
+    match write_frame_within(stream, answer, idle).await {
+        Err(FrameError::TooLarge(_)) => {
+            Ok(write_frame_within(stream, &DiffAnswer::TooLarge, idle).await?)
+        }
+        written => Ok(written?),
     }
 }

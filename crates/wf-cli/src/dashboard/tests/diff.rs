@@ -508,6 +508,13 @@ index 0000000..3333333
 +fn scratch() {}
 ";
 
+fn uncommitted() -> crate::dashboard::diff::UncommittedFiles {
+    crate::dashboard::diff::UncommittedFiles {
+        snapshot: wf_core::session::GitOid::from_bytes([3; 20]),
+        files: wf_vcs::diff::parse(UNCOMMITTED),
+    }
+}
+
 #[test]
 fn the_uncommitted_part_is_a_section_after_the_committed_files_where_no_comment_is_written() {
     let mut app = diff_app();
@@ -515,7 +522,7 @@ fn the_uncommitted_part_is_a_section_after_the_committed_files_where_no_comment_
     pane.read(Ok(crate::dashboard::diff::ItemWork {
         commit: work_commit(),
         changes: crate::dashboard::diff::Changes::Files(wf_vcs::diff::parse(DIFF)),
-        uncommitted: Some(wf_vcs::diff::parse(UNCOMMITTED)),
+        uncommitted: Some(uncommitted()),
     }));
     let committed_files = pane.files().len();
     let shown = screen(&mut app, 100, 40);
@@ -564,7 +571,7 @@ fn the_pane_says_the_agent_made_no_commits_while_it_shows_the_uncommitted_part()
     pane.read(Ok(crate::dashboard::diff::ItemWork {
         commit: work_commit(),
         changes: crate::dashboard::diff::Changes::NoCommits,
-        uncommitted: Some(wf_vcs::diff::parse(UNCOMMITTED)),
+        uncommitted: Some(uncommitted()),
     }));
     let shown = screen(&mut app, 120, 40);
     assert!(shown.contains("has not made any commits"), "{shown}");

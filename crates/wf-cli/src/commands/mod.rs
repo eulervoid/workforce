@@ -13,7 +13,9 @@ mod work;
 
 pub(crate) use item::{Scope, choose_item, sorted_views};
 pub(crate) use review::{resolving, review, write_verdict};
-pub(crate) use vcs::{DeviceDiff, ItemDiff, item_diff, item_work};
+pub(crate) use vcs::{
+    DeviceDiff, ItemDiff, comment_work, item_diff, item_work, snapshot_here, uncommitted_here,
+};
 
 use std::path::Path;
 

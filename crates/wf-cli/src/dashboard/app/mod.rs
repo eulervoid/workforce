@@ -8,7 +8,7 @@ use ratatui::layout::Position;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use wf_core::graph::Readiness;
-use wf_core::id::{ItemId, SessionId};
+use wf_core::id::{CommentId, ItemId, SessionId};
 use wf_core::search::Query;
 use wf_core::session::CommitId;
 use wf_daemon::proto::TranscriptCopy;
@@ -219,6 +219,8 @@ pub struct App {
     /// The diffs opened, by item, kept with where their cursor is and the comments of the review
     /// being written while other details are on screen.
     pub diffs: HashMap<ItemId, DiffPane>,
+    /// The work at the comments opened, by item and comment, with where their cursor is.
+    pub work_at: HashMap<(ItemId, CommentId), DiffPane>,
     pub tab: Tab,
     pub now: ListTab<NowRow>,
     pub items: ItemsTab,
@@ -259,6 +261,7 @@ impl App {
             transcript_copies: HashMap::new(),
             transcript_lines: HashMap::new(),
             diffs: HashMap::new(),
+            work_at: HashMap::new(),
             tab: Tab::Now,
             now: ListTab::default(),
             items: ItemsTab {
@@ -380,6 +383,15 @@ impl App {
                         .iter()
                         .any(|opened| opened.detail == Detail::Diff(*item))
                 })
+        });
+        self.work_at.retain(|(item, comment), _| {
+            let detail = Detail::WorkAt {
+                item: *item,
+                comment: *comment,
+            };
+            stacks
+                .iter()
+                .any(|stack| stack.iter().any(|opened| opened.detail == detail))
         });
     }
 
@@ -754,7 +766,7 @@ impl App {
         {
             *scroll = keys;
         }
-        for pane in self.diffs.values_mut() {
+        for pane in self.diffs.values_mut().chain(self.work_at.values_mut()) {
             pane.area = None;
         }
         for lines in self.transcript_lines.values_mut() {
@@ -968,7 +980,7 @@ impl App {
                     | InboxEntry::LostPush { .. } => false,
                 })
                 .collect(),
-            Some(Detail::Agent(_) | Detail::Flag(_)) | None => Vec::new(),
+            Some(Detail::Agent(_) | Detail::Flag(_) | Detail::WorkAt { .. }) | None => Vec::new(),
         }
     }
 
@@ -977,7 +989,8 @@ impl App {
         match self.detail_for_keys()? {
             Detail::Item(item) | Detail::Diff(item) => Some(item),
             Detail::Session(session) => self.session_info(session).map(|info| info.item),
-            Detail::Agent(_) | Detail::Flag(_) => None,
+            // The work at a comment is only read.
+            Detail::Agent(_) | Detail::Flag(_) | Detail::WorkAt { .. } => None,
         }
     }
 
@@ -991,7 +1004,11 @@ impl App {
                     SessionStatus::Ended { .. } => false,
                 })
                 .map(|info| info.id),
-            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) | Detail::Diff(_) => None,
+            Detail::Item(_)
+            | Detail::Agent(_)
+            | Detail::Flag(_)
+            | Detail::Diff(_)
+            | Detail::WorkAt { .. } => None,
         }
     }
 
@@ -1003,7 +1020,8 @@ impl App {
                 InView::Item { .. }
                 | InView::Agent { .. }
                 | InView::Flag { .. }
-                | InView::Diff { .. },
+                | InView::Diff { .. }
+                | InView::WorkAt { .. },
             )
             | None => None,
         };
@@ -1087,8 +1105,14 @@ impl App {
         if let Detail::Item(item) = detail {
             self.moved_back.retain(|moved| moved.item != *item);
         }
-        if let Detail::Diff(item) = detail {
-            self.diffs.entry(*item).or_default();
+        match detail {
+            Detail::Diff(item) => {
+                self.diffs.entry(*item).or_default();
+            }
+            Detail::WorkAt { item, comment } => {
+                self.work_at.entry((*item, *comment)).or_default();
+            }
+            Detail::Item(_) | Detail::Session(_) | Detail::Agent(_) | Detail::Flag(_) => {}
         }
     }
 
@@ -1127,29 +1151,23 @@ impl App {
             .filter(|in_view| in_view.is_of(detail))
     }
 
-    /// The diff open on top, on screen or kept beside the list.
+    /// The diff open on top, on screen or kept beside the list: of an item's work, or of the work
+    /// at a comment.
     pub fn diff_on_top(&self) -> Option<&DiffPane> {
-        let Some(Opened {
-            detail: Detail::Diff(item),
-            ..
-        }) = self.stack().last()
-        else {
-            return None;
-        };
-        self.diffs.get(item)
+        match self.stack().last()?.detail {
+            Detail::Diff(item) => self.diffs.get(&item),
+            Detail::WorkAt { item, comment } => self.work_at.get(&(item, comment)),
+            Detail::Item(_) | Detail::Session(_) | Detail::Agent(_) | Detail::Flag(_) => None,
+        }
     }
 
     /// The diff open on top, on screen or kept beside the list.
     pub fn diff_on_top_mut(&mut self) -> Option<&mut DiffPane> {
-        let Some(Opened {
-            detail: Detail::Diff(item),
-            ..
-        }) = self.stack().last()
-        else {
-            return None;
-        };
-        let item = *item;
-        self.diffs.get_mut(&item)
+        match self.stack().last()?.detail {
+            Detail::Diff(item) => self.diffs.get_mut(&item),
+            Detail::WorkAt { item, comment } => self.work_at.get_mut(&(item, comment)),
+            Detail::Item(_) | Detail::Session(_) | Detail::Agent(_) | Detail::Flag(_) => None,
+        }
     }
 
     /// Whether the work of `item` waits for the principal's review.
@@ -1214,7 +1232,7 @@ impl App {
             && matches!(
                 self.stack().last(),
                 Some(Opened {
-                    detail: Detail::Diff(_),
+                    detail: Detail::Diff(_) | Detail::WorkAt { .. },
                     ..
                 })
             )

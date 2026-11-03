@@ -15,7 +15,7 @@ use crate::dashboard::hint::{
     ALLOW, ANSWER, ANSWER_IN_EDITOR, BACK, CHANGE, CHANGE_FILTER, CLEAR_FILTER, COMMENT, DENY,
     DIFF, DROP, EDIT, EXTEND, FILE, FILTER, FOLD, FOLLOW, FULL, GROUP, Hint, ITEM, JUMP_BACK, KEYS,
     MOVE, NEXT_SESSION, OPEN, OPEN_DIFF, OPEN_SESSION, PAGER, READINESS, REVIEW, REVIEW_IN_DIFF,
-    SCROLL, SELECT, UNSELECT,
+    SCROLL, SELECT, UNSELECT, WORK_AT,
 };
 use crate::dashboard::snapshot::Detail;
 use crate::dashboard::snapshot::{InView, InboxEntry, MovedBack, SessionInfo};
@@ -211,7 +211,9 @@ pub(super) fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<S
                 // A diff is of an item: named, unless the way here went through it.
                 let name = format!("#{}", item.short());
                 let through_item = path[..index].iter().any(|before| match before {
-                    Detail::Item(before) | Detail::Diff(before) => before == item,
+                    Detail::Item(before)
+                    | Detail::Diff(before)
+                    | Detail::WorkAt { item: before, .. } => before == item,
                     Detail::Session(session) => app
                         .session_info(*session)
                         .is_some_and(|session| session.item == *item),
@@ -221,6 +223,12 @@ pub(super) fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<S
                     crumbs.push((vec![Span::raw(name)], None));
                 }
                 crumbs.push((vec![Span::raw("diff")], depth));
+            }
+            Detail::WorkAt { comment, .. } => {
+                crumbs.push((
+                    vec![Span::raw(format!("work at {}", comment.short()))],
+                    depth,
+                ));
             }
             Detail::Session(id) => {
                 let Some(session) = app.session_info(*id) else {
@@ -437,6 +445,7 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
             Some(pane) if pane.draft_at_cursor().is_some() => &[BACK, MOVE, EDIT, DROP],
             Some(_) | None => &[BACK, MOVE, SELECT, COMMENT, CHANGE, FILE, FOLD, ITEM, PAGER],
         },
+        (_, Some(Detail::WorkAt { .. })) => &[BACK, MOVE, FILE, FOLD],
         (_, Some(Detail::Item(_))) if item_session => &[BACK, SCROLL, OPEN_SESSION],
         (_, Some(Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_))) => &[BACK, SCROLL],
         (Tab::Now, None) => &[OPEN, MOVE],
@@ -452,7 +461,11 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
     let followed = match (app.tab, opened) {
         (_, Some(opened)) => match opened.detail {
             Detail::Session(_) => Some(opened.scroll),
-            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) | Detail::Diff(_) => None,
+            Detail::Item(_)
+            | Detail::Agent(_)
+            | Detail::Flag(_)
+            | Detail::Diff(_)
+            | Detail::WorkAt { .. } => None,
         },
         (Tab::Log, None) => Some(app.log.scroll),
         (Tab::Now | Tab::Items | Tab::Agents, None) => None,
@@ -465,6 +478,10 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
         hints.push(JUMP_BACK);
     }
     hints.extend(acts);
+    // After what waits on the principal, which comes first.
+    if let Some(Detail::Item(_)) = opened.map(|opened| &opened.detail) {
+        hints.push(WORK_AT);
+    }
     hints.push(KEYS);
     hints
 }

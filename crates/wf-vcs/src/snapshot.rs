@@ -8,10 +8,10 @@
 use std::path::{Path, PathBuf};
 
 use wf_core::id::{HashId, ItemId, SessionId};
-use wf_core::session::GitOid;
+use wf_core::session::{CommitId, GitOid};
 
-use crate::git::{spawn, spawn_with_input};
-use crate::{VcsError, bare_repository, item_name, item_repository};
+use crate::git::{show_diff_in, spawn, spawn_with_input};
+use crate::{Pager, VcsError, bare_repository, item_name, item_repository};
 
 /// The largest file a snapshot takes; a larger one is left out and named.
 pub const LARGEST_FILE: u64 = 8 * 1024 * 1024;
@@ -53,7 +53,7 @@ pub fn take_snapshot(
     create_snapshot_repository(&repository, &bare_repository(workforce_directory))?;
     let work_tree = item_repository(workforce_directory, item);
     let index = repository.join(format!("{}.index", session.to_base32()));
-    let latest = latest_snapshot(session);
+    let latest = latest_snapshot_ref(session);
     let (Some(repository_text), Some(work_tree_text), Some(index)) =
         (repository.to_str(), work_tree.to_str(), index.to_str())
     else {
@@ -150,15 +150,103 @@ pub fn record_snapshot(
     spawn(
         &repository,
         &[],
-        ["update-ref", &latest_snapshot(session), &tree.to_string()],
+        [
+            "update-ref",
+            &latest_snapshot_ref(session),
+            &tree.to_string(),
+        ],
     )?
     .ok()?;
     Ok(())
 }
 
 /// The reference to the latest recorded snapshot of `session`.
-fn latest_snapshot(session: SessionId) -> String {
+fn latest_snapshot_ref(session: SessionId) -> String {
     format!("refs/snapshots/{}", session.to_base32())
+}
+
+/// The tree of the latest recorded snapshot of `session` on `item`; `None` when it recorded none.
+pub fn latest_snapshot(
+    workforce_directory: &Path,
+    item: ItemId,
+    session: SessionId,
+) -> Result<Option<GitOid>, VcsError> {
+    let repository = snapshot_repository(workforce_directory, item);
+    if !repository.join("HEAD").is_file() {
+        return Ok(None);
+    }
+    let found = spawn(
+        &repository,
+        &[],
+        [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &latest_snapshot_ref(session),
+        ],
+    )?;
+    match found.success {
+        true => Ok(Some(parse_tree("rev-parse", &found.stdout)?)),
+        false => Ok(None),
+    }
+}
+
+/// What the snapshot `tree` of `item` changes against `commit`, which the workforce's bare
+/// repository has: the uncommitted part of the work at the snapshot, in the form
+/// [`crate::diff::parse`] reads.
+pub fn snapshot_diff(
+    workforce_directory: &Path,
+    item: ItemId,
+    commit: CommitId,
+    tree: GitOid,
+) -> Result<String, VcsError> {
+    let args = crate::diff::ARGS.map(String::from);
+    snapshot_diff_with(workforce_directory, item, commit, tree, &args)
+}
+
+/// The same diff with `args` added to `git diff`, such as `--stat` or `-- src/`, as
+/// [`crate::GitCli::diff`] takes them.
+pub fn snapshot_diff_with(
+    workforce_directory: &Path,
+    item: ItemId,
+    commit: CommitId,
+    tree: GitOid,
+    args: &[String],
+) -> Result<String, VcsError> {
+    let repository = snapshot_repository(workforce_directory, item);
+    spawn(
+        &repository,
+        &[],
+        ["diff".to_string()]
+            .into_iter()
+            .chain(snapshot_diff_arguments(commit, tree, args)),
+    )?
+    .ok()
+}
+
+/// The same diff with `args`, written to the terminal by git itself, as
+/// [`crate::GitCli::show_diff`] does.
+pub fn show_snapshot_diff(
+    workforce_directory: &Path,
+    item: ItemId,
+    commit: CommitId,
+    tree: GitOid,
+    args: &[String],
+    pager: Pager,
+) -> Result<(), VcsError> {
+    let repository = snapshot_repository(workforce_directory, item);
+    show_diff_in(
+        &repository,
+        &snapshot_diff_arguments(commit, tree, args),
+        pager,
+    )
+}
+
+/// The revisions of the diff of `tree` against `commit`, then `args`, whose paths follow `--`.
+fn snapshot_diff_arguments(commit: CommitId, tree: GitOid, args: &[String]) -> Vec<String> {
+    let mut all = vec![commit.to_string(), tree.to_string()];
+    all.extend(args.iter().cloned());
+    all
 }
 
 /// The tree `command` printed.
@@ -332,6 +420,45 @@ mod tests {
             (next.tree, next.previous),
             (unrecorded.tree, Some(first.tree))
         );
+    }
+
+    #[test]
+    fn a_snapshot_is_the_latest_once_recorded_and_diffs_against_a_commit_of_the_bare_repository() {
+        let workforce = Workforce::new();
+        let root = workforce.root.path();
+        assert_eq!(
+            latest_snapshot(root, workforce.item, workforce.session).unwrap(),
+            None
+        );
+        let bare = bare_repository(root).display().to_string();
+        git_in(
+            &workforce.agent(),
+            &["push", "--quiet", &bare, "HEAD:refs/heads/work"],
+        );
+        let head = git_in(Path::new(&bare), &["rev-parse", "work"]);
+        let head = CommitId::Git(head.trim().parse().unwrap());
+        workforce.write("file.txt", b"changed\n");
+        workforce.write("new.txt", b"new\n");
+
+        let unrecorded = workforce.take();
+        assert_eq!(
+            latest_snapshot(root, workforce.item, workforce.session).unwrap(),
+            None
+        );
+        let snapshot = workforce.snapshot();
+        assert_eq!(snapshot.tree, unrecorded.tree);
+        assert_eq!(
+            latest_snapshot(root, workforce.item, workforce.session).unwrap(),
+            Some(snapshot.tree)
+        );
+
+        let diff = snapshot_diff(root, workforce.item, head, snapshot.tree).unwrap();
+        let files: Vec<String> = crate::diff::parse(&diff)
+            .into_iter()
+            .map(|file| file.path)
+            .collect();
+        assert_eq!(files, ["file.txt", "new.txt"]);
+        assert!(diff.contains("+changed"));
     }
 
     #[test]

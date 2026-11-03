@@ -145,6 +145,10 @@ impl Target {
                 name,
             } => format!("open the diff of {name}"),
             Target::Open {
+                detail: Detail::WorkAt { .. },
+                name,
+            } => format!("open the work at comment {name}"),
+            Target::Open {
                 detail: Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_),
                 name,
             } => format!("open {name}"),

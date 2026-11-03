@@ -31,7 +31,7 @@ use wf_core::identity::AgentId;
 use wf_daemon::proto::HeldPermission;
 
 use self::app::{App, Wheel};
-use self::diff::{Changes, ItemWork};
+use self::diff::{Changes, ItemWork, UncommittedFiles};
 use self::restart::{Executable, Mismatch};
 use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
 use crate::commands::{DeviceDiff, ItemDiff};
@@ -146,6 +146,7 @@ fn event_loop(
     }
     feed.read_transcripts(workspace, &mut app);
     feed.read_diff(workspace, &mut app);
+    feed.read_work_at(workspace, &mut app);
     if let Some(snapshot) = feed.snapshot(workspace, &mut app)? {
         app.refresh(snapshot);
     }
@@ -193,6 +194,7 @@ fn event_loop(
                 draw = true;
                 feed.read_transcripts(workspace, &mut app);
                 feed.read_diff(workspace, &mut app);
+                feed.read_work_at(workspace, &mut app);
                 match feed.in_view(workspace, &app) {
                     Ok(in_view) => app.refresh_detail(in_view),
                     Err(error) => app.refresh_failed(&error),
@@ -203,6 +205,7 @@ fn event_loop(
         draw = true;
         feed.read_transcripts(workspace, &mut app);
         feed.read_diff(workspace, &mut app);
+        feed.read_work_at(workspace, &mut app);
         match feed.snapshot(workspace, &mut app)? {
             Some(snapshot) => app.refresh(snapshot),
             None => app.tick(wf_store::now_ms()),
@@ -429,7 +432,7 @@ impl KeptEvents {
         detail: Option<&Detail>,
     ) -> anyhow::Result<&[Event]> {
         match detail {
-            Some(Detail::Item(item) | Detail::Diff(item)) => {
+            Some(Detail::Item(item) | Detail::Diff(item) | Detail::WorkAt { item, .. }) => {
                 self.read(workspace, &[*item])?;
                 Ok(self.of(*item))
             }
@@ -630,6 +633,33 @@ impl Feed {
         }
     }
 
+    /// Hands the app the work at the comment on screen, asked of the device of its session once
+    /// when it is opened, or why it cannot be read.
+    fn read_work_at(&mut self, workspace: &Workspace, app: &mut App) {
+        let Some(Detail::WorkAt { item, comment }) = app.wanted().detail else {
+            return;
+        };
+        let Some(pane) = app.work_at.get_mut(&(item, comment)) else {
+            return;
+        };
+        if pane.work().is_some() {
+            return;
+        }
+        let read = match commands::comment_work(workspace, item, comment) {
+            Ok(Some(work)) => Ok(ItemWork {
+                commit: work.head,
+                changes: Changes::Files(wf_vcs::diff::parse(&work.committed)),
+                uncommitted: work.uncommitted.as_ref().map(UncommittedFiles::read),
+            }),
+            Ok(None) => Err(format!(
+                "comment {} shows no work",
+                wf_core::id::HashId::short(&comment)
+            )),
+            Err(error) => Err(format!("{error:#}")),
+        };
+        pane.read(read);
+    }
+
     /// Hands the app the work of the item whose diff is on screen, when its branch moved since
     /// it was last read, or why it cannot be read.
     fn read_diff(&mut self, workspace: &Workspace, app: &mut App) {
@@ -648,12 +678,21 @@ impl Feed {
                 None => self.git.insert(workspace.repository()?),
             };
             let now_ms = wf_store::now_ms();
-            match commands::item_diff(workspace, git, item, pane.commit())? {
+            match commands::item_diff(workspace, git, item, pane.work_at())? {
                 ItemDiff::Local(work) => {
                     self.asked_devices.forget(item);
                     let commit = work.shown();
-                    if pane.commit() == Some(commit) && pane.device().is_none() {
-                        // The head did not move.
+                    // A session working here has its uncommitted part in its latest snapshot.
+                    let snapshot = match &work {
+                        wf_vcs::Work::Unmerged { .. } => commands::snapshot_here(workspace, item)?,
+                        wf_vcs::Work::Merged { .. } => None,
+                    };
+                    let at = wf_net::WorkAt {
+                        head: commit,
+                        snapshot,
+                    };
+                    if pane.work_at() == Some(at) && pane.device().is_none() {
+                        // Neither the head nor the snapshot moved.
                         return Ok(());
                     }
                     let changes = if git.has_commits(&work)? {
@@ -661,10 +700,16 @@ impl Feed {
                     } else {
                         Changes::NoCommits
                     };
+                    let uncommitted = match snapshot {
+                        Some(snapshot) => Some(UncommittedFiles::read(
+                            &commands::uncommitted_here(workspace, item, commit, snapshot)?,
+                        )),
+                        None => None,
+                    };
                     pane.read(Ok(ItemWork {
                         commit,
                         changes,
-                        uncommitted: None,
+                        uncommitted,
                     }));
                 }
                 ItemDiff::Device { device, diff } => {
@@ -675,7 +720,7 @@ impl Feed {
                             let work = ItemWork {
                                 commit: work.head,
                                 changes,
-                                uncommitted: None,
+                                uncommitted: work.uncommitted.as_ref().map(UncommittedFiles::read),
                             };
                             pane.read_from_device(device, work, now_ms);
                         }
