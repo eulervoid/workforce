@@ -309,6 +309,14 @@ async fn turns(
     let mut accepted = conversation.accepted();
     let mut blocks = conversation.blocks();
     let mut last_head = branch_head(run);
+    if run.role == SessionRole::Work
+        && matches!(run.begin, Begin::New)
+        && let Some(head) = last_head
+    {
+        daemon
+            .record_start(run.workforce, run.item, run.session, head)
+            .await;
+    }
     let mut turns_without_commit = 0;
     let mut imported = None;
     let mut importing = tokio::time::interval(IMPORT_EVERY);

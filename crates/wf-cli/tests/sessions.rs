@@ -1151,6 +1151,22 @@ wf work release --note \"stopping\"
         !files(&snapshots[1]).lines().any(|file| file == "notes.txt"),
         "what rm deleted"
     );
+    // The first block changed the files against where the branch started, before the commit
+    // made in it; the second against the first.
+    assert_eq!(
+        snapshots[0]["changes"]["files"],
+        serde_json::json!([
+            {"path": "kept.txt", "change": "added", "added": 1, "removed": 0},
+            {"path": "notes.txt", "change": "added", "added": 1, "removed": 0},
+        ])
+    );
+    assert_eq!(
+        snapshots[1]["changes"],
+        serde_json::json!({
+            "against": snapshots[0]["snapshot"],
+            "files": [{"path": "notes.txt", "change": "deleted", "added": 0, "removed": 1}],
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

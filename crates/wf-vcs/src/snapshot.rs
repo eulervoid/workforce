@@ -191,6 +191,70 @@ pub fn latest_snapshot(
     }
 }
 
+/// Keeps `head`, where the branch of `item` was when `session` started, as the reference
+/// `refs/started/<session>` in the item's snapshot repository: what the session's first snapshot
+/// changed is against it. Makes the snapshot repository on first use.
+pub fn record_start(
+    workforce_directory: &Path,
+    item: ItemId,
+    session: SessionId,
+    head: CommitId,
+) -> Result<(), VcsError> {
+    let repository = snapshot_repository(workforce_directory, item);
+    create_snapshot_repository(&repository, &bare_repository(workforce_directory))?;
+    spawn(
+        &repository,
+        &[],
+        ["update-ref", &started_ref(session), &head.to_string()],
+    )?
+    .ok()?;
+    Ok(())
+}
+
+/// Where the branch of `item` was when `session` started, as [`record_start`] kept it.
+pub fn started_on(
+    workforce_directory: &Path,
+    item: ItemId,
+    session: SessionId,
+) -> Result<Option<CommitId>, VcsError> {
+    let repository = snapshot_repository(workforce_directory, item);
+    if !repository.join("HEAD").is_file() {
+        return Ok(None);
+    }
+    let found = spawn(
+        &repository,
+        &[],
+        ["rev-parse", "--verify", "--quiet", &started_ref(session)],
+    )?;
+    match found.success {
+        true => Ok(Some(CommitId::Git(parse_tree("rev-parse", &found.stdout)?))),
+        false => Ok(None),
+    }
+}
+
+fn started_ref(session: SessionId) -> String {
+    format!("refs/started/{}", session.to_base32())
+}
+
+/// What the snapshot `tree` of `item` changes against `against`, the snapshot before it or the
+/// commit its session started on, in the form [`crate::diff::parse`] reads.
+pub fn snapshot_changes(
+    workforce_directory: &Path,
+    item: ItemId,
+    against: GitOid,
+    tree: GitOid,
+) -> Result<String, VcsError> {
+    let repository = snapshot_repository(workforce_directory, item);
+    spawn(
+        &repository,
+        &[],
+        ["diff".to_string(), against.to_string(), tree.to_string()]
+            .into_iter()
+            .chain(crate::diff::ARGS.map(String::from)),
+    )?
+    .ok()
+}
+
 /// What the snapshot `tree` of `item` changes against `commit`, which the workforce's bare
 /// repository has: the uncommitted part of the work at the snapshot, in the form
 /// [`crate::diff::parse`] reads.

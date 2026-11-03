@@ -1192,14 +1192,17 @@ was when it was written.
   `--work-tree=<agent repository>` and an index of the session's own
   (`<wf>/snapshots/<item>/<session>.index`, kept between snapshots so only changed files are
   read; its latest recorded tree is the reference `refs/snapshots/<session>` there, moved only
-  once the entry is in the transcript): `add -A`, then
-  `write-tree`. No git process reads the agent repository's `.git`, so its
+  once the entry is in the transcript; where the branch was when the session started is
+  `refs/started/<session>`): `add -A`, then `write-tree`. No git process reads the agent repository's `.git`, so its
   config, hooks and filters play no part; `.gitignore` and `.gitattributes` among the files apply
   as in a commit. A file over 8 MiB is left out and the snapshot names it as left out.
 * **Recorded** in the session's transcript as an entry written by wf
   (`{"snapshot": <tree>, "head": <commit>?, "base": <commit>?, "at": "block" | "comment" |
-  "turn_end", "comment": <id>?, "left_out": [<path>, ...]}`, `head` where the item's branch was,
-  `base` its merge base with the target then), at a comment always, so
+  "turn_end", "comment": <id>?, "left_out": [<path>, ...], "changes": {"against": <tree or
+  commit>, "files": [{"path", "change", "added", "removed"}, ...]}}`, `head` where the item's
+  branch was, `base` its merge base with the target then, `changes` the files it changed against
+  the session's previous recorded snapshot, the first against where the branch was when the
+  session started), at a comment always, so
   that the comment finds it, and otherwise only when the tree differs from the session's previous
   recorded snapshot. Snapshots never enter the log: no other
   device has their objects, and the log names only what every device can fetch. Other devices ask

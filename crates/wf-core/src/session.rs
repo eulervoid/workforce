@@ -130,6 +130,39 @@ impl CommentSnapshot {
     }
 }
 
+/// How a diff changes a file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChange {
+    Added,
+    Deleted,
+    Modified,
+    /// Moved from `from`, maybe changed too.
+    Renamed {
+        from: String,
+    },
+}
+
+/// What a snapshot changed in one file against the session's snapshot before it, as its entry in
+/// the transcript lists it (SPEC §10): without the lines, which only the session's device has.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangedFile {
+    /// The path the file has after the change; before it, for a file deleted.
+    pub path: String,
+    pub change: FileChange,
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// What a snapshot changed against the session's snapshot before it, or for its first against the
+/// commit the session started on, as its entry in the transcript records it (SPEC §10).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotChanges {
+    /// The tree of the snapshot before, or the commit the session started on.
+    pub against: GitOid,
+    pub files: Vec<ChangedFile>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SessionRole {
     Work,
