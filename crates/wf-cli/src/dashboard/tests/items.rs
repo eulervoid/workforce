@@ -351,29 +351,55 @@ fn the_keys_show_on_a_question_mark() {
 }
 
 #[test]
-fn the_keys_show_in_sections_those_of_where_the_keys_are_first() {
-    /// The title of the first section: the line after the popup's title.
-    fn first_section(app: &mut App) -> String {
+fn the_keys_show_in_sections_general_first_and_the_others_to_its_right() {
+    /// The titles of the sections, by the column and the row they are in.
+    fn sections(app: &mut App) -> Vec<String> {
         press(app, KeyCode::Char('?'));
-        let drawn = Drawn::of(app, 150, 30);
+        let drawn = Drawn::of(app, 180, 30);
         press(app, KeyCode::Esc);
-        let lines = drawn.lines();
-        let title = lines.iter().position(|line| line.contains("keys")).unwrap();
-        lines[title + 1]
-            .trim_start_matches(['▎', ' ', '│'])
-            .split("  ")
-            .next()
-            .unwrap()
-            .to_owned()
+        let titles = [
+            "general",
+            "item list",
+            "item view",
+            "selected item",
+            "now",
+            "transcript",
+            "diff",
+        ];
+        let mut found: Vec<(usize, usize, String)> = Vec::new();
+        for (row, line) in drawn.lines().iter().enumerate() {
+            for title in titles {
+                let mut start = 0;
+                while let Some(at) = line[start..].find(&format!(" {title}  ")) {
+                    let before = &line[..start + at];
+                    // A title starts a column, where a key's words do not.
+                    if before.ends_with([' ', '│']) {
+                        found.push((before.chars().count(), row, title.to_owned()));
+                    }
+                    start += at + 1;
+                }
+            }
+        }
+        found.sort();
+        found.into_iter().map(|(_, _, title)| title).collect()
     }
+    let expected = [
+        "general",
+        "item list",
+        "item view",
+        "selected item",
+        "now",
+        "transcript",
+        "diff",
+    ];
+    // The same wherever the keys are.
     let mut app = app();
+    assert_eq!(sections(&mut app), expected);
     press(&mut app, KeyCode::Char('2'));
     app.refresh(with_items());
-    assert_eq!(first_section(&mut app), "the items list");
     press(&mut app, KeyCode::Enter);
-    assert_eq!(first_section(&mut app), "an item");
-    let mut diff = diff_app();
-    assert_eq!(first_section(&mut diff), "a diff");
+    assert_eq!(sections(&mut app), expected);
+    assert_eq!(sections(&mut diff_app()), expected);
     // In a wide window, every section shows, in columns.
     let mut app = self::app();
     press(&mut app, KeyCode::Char('?'));

@@ -42,7 +42,7 @@ fn a_background_colour_and_the_text_are_under_every_cell_popups_included() {
         );
     }
     // A blank inside the popup, and one outside it, in the text colour on the background.
-    let (x, y) = find(&mut app, 60, 24, "allow, deny");
+    let (x, y) = find(&mut app, 60, 24, "a page up, down");
     for (x, y) in [(x + 35, y), (59, 0)] {
         let style = buffer[(x, y)].style();
         assert_eq!(buffer[(x, y)].symbol(), " ");
@@ -79,7 +79,7 @@ fn the_terminals_background_and_no_text_paint_nothing() {
         );
     }
     // A blank inside the popup, and one outside it, in the terminal's own colours.
-    let (x, y) = find(&mut app, 60, 24, "allow, deny");
+    let (x, y) = find(&mut app, 60, 24, "a page up, down");
     for (x, y) in [(x + 35, y), (59, 0)] {
         assert_eq!(buffer[(x, y)], ratatui::buffer::Cell::EMPTY);
     }

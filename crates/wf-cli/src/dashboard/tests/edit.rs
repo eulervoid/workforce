@@ -2,7 +2,7 @@
 
 use super::support::*;
 use crate::dashboard::act;
-use crate::dashboard::app::{App, Choice, Effect, Field, Prompt};
+use crate::dashboard::app::{App, Choice, Effect, Field, Prompt, Status};
 use crate::view::{ItemGroup, ItemSummary};
 use ratatui::crossterm::event::KeyCode;
 use wf_core::crdt::SetChange;
@@ -247,23 +247,44 @@ fn review_and_recovery_offer_the_types_level() {
 }
 
 #[test]
-fn the_set_input_adds_removes_and_creates_labels_as_one_edit() {
+fn the_set_input_marks_unmarks_and_creates_labels_and_applies_them_as_one_edit() {
     let mut workforce = Workforce::new();
     workforce.press(KeyCode::Char('E'));
     workforce.press(KeyCode::Char('7'));
     insta::assert_snapshot!("set_labels", screen(&mut workforce.app, 60, 12));
-    // `cli`, then `ui`, which the item has.
-    workforce.press(KeyCode::Char(' '));
+    // A value found is marked, and the search cleared for the next.
+    type_text(&mut workforce.app, "cl");
+    let found = screen(&mut workforce.app, 60, 12);
+    assert!(!found.contains("[x] ui"), "typing searches: {found}");
+    assert_eq!(workforce.press(KeyCode::Enter), None, "enter marks cli");
+    let marked = screen(&mut workforce.app, 60, 12);
+    assert!(
+        marked.contains("[x] cli") && marked.contains("[x] ui"),
+        "{marked}"
+    );
+    // A value the item holds is unmarked; the arrows select among those found.
+    type_text(&mut workforce.app, "i");
     workforce.press(KeyCode::Down);
-    workforce.press(KeyCode::Char(' '));
-    type_text(&mut workforce.app, "jobs");
-    let screen = screen(&mut workforce.app, 60, 12);
-    assert!(screen.contains("enter adds jobs"), "{screen}");
-    assert!(!screen.contains("[x] cli"), "typing filters: {screen}");
-    assert_eq!(workforce.press(KeyCode::Enter), None, "enter adds it");
-    assert!(super::support::screen(&mut workforce.app, 60, 12).contains("[x] jobs"));
+    assert_eq!(workforce.press(KeyCode::Enter), None, "enter unmarks ui");
+    assert!(screen(&mut workforce.app, 60, 12).contains("[ ] ui"));
+    // Text that finds no value is created, marked; letters are text, not moves.
+    type_text(&mut workforce.app, "jk");
+    let create = screen(&mut workforce.app, 60, 12);
+    assert!(create.contains("+ create \"jk\""), "{create}");
+    assert_eq!(workforce.press(KeyCode::Enter), None, "enter creates jk");
+    assert!(screen(&mut workforce.app, 60, 12).contains("[x] jk"));
+    // A value that is not one says why, and is not created.
+    type_text(&mut workforce.app, "Not A Label");
+    assert_eq!(workforce.press(KeyCode::Enter), None);
+    assert!(matches!(
+        workforce.app.status,
+        Some(Status::ActionFailed { .. })
+    ));
+    for _ in 0.."Not A Label".len() {
+        workforce.press(KeyCode::Backspace);
+    }
     let Some(EventBody::ItemEdited(edited)) = workforce.press(KeyCode::Enter) else {
-        panic!("nothing written");
+        panic!("enter with no text writes nothing");
     };
     assert_eq!(edited.item, workforce.item);
     assert!(matches!(
@@ -271,10 +292,29 @@ fn the_set_input_adds_removes_and_creates_labels_as_one_edit() {
         [
             Change::Labels(SetChange::Add(cli)),
             Change::Labels(SetChange::Remove { value: ui, .. }),
-            Change::Labels(SetChange::Add(jobs)),
-        ] if *cli == label("cli") && *ui == label("ui") && *jobs == label("jobs")
+            Change::Labels(SetChange::Add(jk)),
+        ] if *cli == label("cli") && *ui == label("ui") && *jk == label("jk")
     ));
-    assert_eq!(workforce.labels(), ["cli", "jobs"]);
+    assert!(workforce.app.prompt.is_none());
+    assert_eq!(workforce.labels(), ["cli", "jk"]);
+}
+
+#[test]
+fn the_set_input_creates_a_value_that_is_part_of_another() {
+    let mut workforce = Workforce::new();
+    workforce.press(KeyCode::Char('E'));
+    workforce.press(KeyCode::Char('7'));
+    type_text(&mut workforce.app, "c");
+    // `cli`, then `c` to create.
+    workforce.press(KeyCode::Down);
+    workforce.press(KeyCode::Enter);
+    let Some(EventBody::ItemEdited(edited)) = workforce.press(KeyCode::Enter) else {
+        panic!("nothing written");
+    };
+    assert!(matches!(
+        &edited.changes[..],
+        [Change::Labels(SetChange::Add(c))] if *c == label("c")
+    ));
 }
 
 #[test]
@@ -282,7 +322,8 @@ fn the_set_input_changes_nothing_on_esc() {
     let mut workforce = Workforce::new();
     workforce.press(KeyCode::Char('E'));
     workforce.press(KeyCode::Char('7'));
-    workforce.press(KeyCode::Char(' '));
+    type_text(&mut workforce.app, "cli");
+    workforce.press(KeyCode::Enter);
     type_text(&mut workforce.app, "new");
     workforce.press(KeyCode::Enter);
     assert_eq!(workforce.press(KeyCode::Esc), None);
@@ -305,11 +346,11 @@ fn a_requirement_no_agent_of_the_lane_has_is_marked() {
     };
     assert!(line("[ ] gpu").contains("no agent of its lane has it"));
     assert!(!line("[ ] rust").contains("no agent"));
-    // A requirement typed in is marked as it is typed.
+    // A requirement to create is marked as it is typed.
     type_text(&mut workforce.app, "linux");
     let screen = screen(&mut workforce.app, 70, 12);
     assert!(
-        screen.contains("enter adds linux  no agent of its lane has it"),
+        screen.contains("+ create \"linux\"▌  no agent of its lane has it"),
         "{screen}"
     );
     workforce.press(KeyCode::Enter);

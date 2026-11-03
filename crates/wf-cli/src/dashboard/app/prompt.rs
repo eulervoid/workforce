@@ -313,35 +313,70 @@ pub struct Member {
     pub marked: bool,
 }
 
-/// The input for a set of an item: the values known, those it is to have marked.
+/// A row of the set input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Found<'a> {
+    /// A known value that contains the search, by its place among all.
+    Member(usize),
+    /// The searched text, which no value is: enter creates it.
+    New(&'a str),
+}
+
+/// The input for a set of an item, as one search field: the values known, those it is to have
+/// marked.
 #[derive(Clone, Debug)]
 pub struct SetInput {
     pub item: ItemId,
     pub set: Set,
     pub members: Vec<Member>,
-    /// What the values listed must contain; a value not listed is added with enter.
-    pub filter: Input,
-    /// The selected one of those listed.
+    /// What the values found contain; with no text, enter applies the marks.
+    pub search: Input,
+    /// The selected one of those found.
     pub index: usize,
 }
 
 impl SetInput {
-    /// The members that contain the filter, by their place among all.
-    pub fn listed(&self) -> Vec<usize> {
-        let filter = self.filter.value().trim();
-        self.members
+    /// The rows the search finds: the values that contain it, and the text itself when no value
+    /// is it, so that a value can be created that is part of another.
+    pub fn found(&self) -> Vec<Found<'_>> {
+        let search = self.search.value().trim();
+        let mut found: Vec<Found> = self
+            .members
             .iter()
             .enumerate()
-            .filter(|(_, member)| member.value.contains(filter))
-            .map(|(index, _)| index)
-            .collect()
+            .filter(|(_, member)| member.value.contains(search))
+            .map(|(index, _)| Found::Member(index))
+            .collect();
+        if !search.is_empty() && !self.members.iter().any(|member| member.value == search) {
+            found.push(Found::New(search));
+        }
+        found
     }
 
-    /// The typed text, when enter adds it: no value is listed as it is.
-    pub fn new_value(&self) -> Option<&str> {
-        let filter = self.filter.value().trim();
-        (!filter.is_empty() && !self.members.iter().any(|member| member.value == filter))
-            .then_some(filter)
+    /// Marks or unmarks the value of the row `index` found, or creates it marked, and clears the
+    /// search for the next, with the selection on that value. Why the value cannot be created, if
+    /// it cannot.
+    fn pick(&mut self, index: usize) -> Result<(), NameError> {
+        let picked = match self.found().get(index).copied() {
+            None => return Ok(()),
+            Some(Found::Member(member)) => member,
+            Some(Found::New(value)) => {
+                self.set.check(value)?;
+                let value = value.to_owned();
+                self.members.push(Member {
+                    value,
+                    held: None,
+                    marked: false,
+                });
+                self.members.len() - 1
+            }
+        };
+        let member = &mut self.members[picked];
+        member.marked = !member.marked;
+        self.search.reset();
+        // With no search, every value is found in its place.
+        self.index = picked;
+        Ok(())
     }
 
     /// What the marks change, as one edit; `None` when they change nothing.
@@ -462,7 +497,7 @@ impl App {
             | Prompt::Answer { input, .. }
             | Prompt::Comment { input, .. }
             | Prompt::LineComment { input, .. }
-            | Prompt::Set(SetInput { filter: input, .. }),
+            | Prompt::Set(SetInput { search: input, .. }),
         ) = &mut self.prompt
         else {
             return false;
@@ -685,49 +720,41 @@ impl App {
         }
     }
 
-    /// A key of the set input. Letters go into the filter, as a value can have any of them, so
+    /// A key of the set input. Letters go into the search, as a value can have any of them, so
     /// the arrows move.
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "crossterm's `KeyCode` has keys no binding uses"
     )]
     fn set_key(&mut self, mut input: SetInput, key: KeyEvent) -> (Option<Prompt>, Option<Effect>) {
-        let listed = input.listed();
         match key.code {
             KeyCode::Esc => return (None, None),
-            KeyCode::Down => input.index = (input.index + 1).min(listed.len().saturating_sub(1)),
+            KeyCode::Down => {
+                input.index = (input.index + 1).min(input.found().len().saturating_sub(1));
+            }
             KeyCode::Up => input.index = input.index.saturating_sub(1),
-            // A value has no spaces.
-            KeyCode::Char(' ') => {
-                if let Some(&member) = listed.get(input.index) {
-                    let member = &mut input.members[member];
-                    member.marked = !member.marked;
-                }
+            KeyCode::Enter if input.search.value().trim().is_empty() => {
+                return (None, input.applied());
             }
             KeyCode::Enter => {
-                let Some(value) = input.new_value().map(str::to_owned) else {
-                    return (None, input.applied());
-                };
-                if let Err(error) = input.set.check(&value) {
-                    self.status = Some(Status::ActionFailed {
-                        error: error.to_string(),
-                        at_ms: self.snapshot.now_ms,
-                    });
-                } else {
-                    input.members.push(Member {
-                        value,
-                        held: None,
-                        marked: true,
-                    });
-                    input.filter.reset();
-                    input.index = input.members.len() - 1;
-                }
+                let index = input.index;
+                self.pick_found(&mut input, index);
             }
             _ => {
-                input.filter.handle_event(&TerminalEvent::Key(key));
+                input.search.handle_event(&TerminalEvent::Key(key));
                 input.index = 0;
             }
         }
         (Some(Prompt::Set(input)), None)
+    }
+
+    /// Picks the row `index` the set input finds; a value that cannot be created says why.
+    pub(super) fn pick_found(&mut self, input: &mut SetInput, index: usize) {
+        if let Err(error) = input.pick(index) {
+            self.status = Some(Status::ActionFailed {
+                error: error.to_string(),
+                at_ms: self.snapshot.now_ms,
+            });
+        }
     }
 }
