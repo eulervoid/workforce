@@ -3,6 +3,7 @@
 mod accent;
 mod agent_detail;
 mod agents;
+mod changes;
 mod context;
 mod detail;
 mod diff;

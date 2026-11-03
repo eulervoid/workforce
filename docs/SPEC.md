@@ -1207,8 +1207,12 @@ was when it was written.
   recorded snapshot. Snapshots never enter the log: no other
   device has their objects, and the log names only what every device can fetch. Other devices ask
   for their diffs over `wf/query/3` (section 14; `3`: `Changes` was added).
-* **Shown:** the transcript shows under each block the diff of its snapshot against the one before
-  (the session's first against the branch's head when it started); a comment by a work session
+* **Shown:** the transcript (the dashboard and `wf session watch`) shows under each block the files
+  its snapshot changed against the one before (the session's first against the branch's head when
+  it started), from its entry, folded to their headers as in the diff; in the dashboard `enter` on
+  them opens their diff in place, asked once of the session's device (`Query::Changes`). A
+  snapshot that comes after a turn's footer, as when the agent ended the turn right after its
+  text, shows below it. The diffs that edit tool calls carry stay as they are; a comment by a work session
   shows the work at its snapshot against the target, committed (from its `base`, so a later merge
   leaves it as it was) and uncommitted (against its `head`) apart. A comment resolving a blocker that parked a session shows the snapshot the session parked
   on, which is the work as the one who resolved it saw it, as a parked session changes nothing. The

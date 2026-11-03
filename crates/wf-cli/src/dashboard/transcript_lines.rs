@@ -14,6 +14,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
 use ratatui::text::Line;
 
+use wf_core::session::GitOid;
+use wf_vcs::diff::FileDiff;
+
 use super::app::Scroll;
 use crate::transcript::{Block, Layout, Spacing, Transcript, Verbosity};
 
@@ -63,6 +66,9 @@ pub struct TranscriptLines {
     /// The entries opened or closed by hand since `f` last set them all, by their block, and how
     /// much each shows.
     by_hand: HashMap<usize, Verbosity>,
+    /// The entries of the files a snapshot changed that are opened to their diff, by their block,
+    /// with the diff once the device of the session answered, or why it did not.
+    opened_changes: HashMap<usize, Option<Result<Vec<FileDiff>, String>>>,
     /// One for each block laid out, by its place in the transcript.
     entries: Vec<Entry>,
     lines: Vec<Line<'static>>,
@@ -79,6 +85,7 @@ impl TranscriptLines {
         Self {
             layout,
             by_hand: HashMap::new(),
+            opened_changes: HashMap::new(),
             entries: Vec::new(),
             lines: Vec::new(),
             last: Spacing::Nothing,
@@ -114,6 +121,15 @@ impl TranscriptLines {
     /// The text of the block at `index`, as much of it as opened or closed by hand, else as the
     /// layout says, and how much of it that is.
     fn lay_out(&self, index: usize, block: &Block) -> (String, Extent) {
+        if let Block::Changes { files, .. } = block {
+            return match self.opened_changes.get(&index) {
+                None => (self.layout.block(block), Extent::Abridged),
+                Some(diff) => (
+                    self.layout.opened_changes(files, diff.as_ref()),
+                    Extent::Full,
+                ),
+            };
+        }
         let verbosity = self
             .by_hand
             .get(&index)
@@ -186,22 +202,73 @@ impl TranscriptLines {
     }
 
     /// Opens the entry of the block at `index` in full, or closes it back to abridged, whatever
-    /// `f` set; returns its first line, or `None` for an entry with nothing to abridge. Only
-    /// that block is laid out again.
+    /// `f` set; the files a snapshot changed open to their diff, which
+    /// [`TranscriptLines::unread_changes`] then asks for. Returns its first line, or `None` for an
+    /// entry with nothing to open. Only that block is laid out again.
     pub fn toggle(&mut self, index: usize, transcript: &Transcript) -> Option<usize> {
         let (entry, block) = self
             .entries
             .get(index)
             .zip(transcript.blocks().get(index))?;
+        if let Block::Changes { .. } = block {
+            if self.opened_changes.remove(&index).is_none() {
+                self.opened_changes.insert(index, None);
+            }
+            return self.lay_out_again(index, block);
+        }
         let verbosity = match entry.extent {
             Extent::Whole => return None,
             Extent::Abridged => Verbosity::Full,
             Extent::Full => Verbosity::Abridged,
         };
-        let old = entry.lines.clone();
         self.by_hand.insert(index, verbosity);
+        self.lay_out_again(index, block)
+    }
+
+    /// The entries of changed files opened whose diff is not read yet: their block, and the
+    /// snapshot and what it is against.
+    pub fn unread_changes(&self, transcript: &Transcript) -> Vec<(usize, GitOid, GitOid)> {
+        let mut unread: Vec<_> = self
+            .opened_changes
+            .iter()
+            .filter(|(_, diff)| diff.is_none())
+            .filter_map(|(index, _)| {
+                let Block::Changes {
+                    snapshot, against, ..
+                } = transcript.blocks().get(*index)?
+                else {
+                    return None;
+                };
+                Some((*index, *snapshot, *against))
+            })
+            .collect();
+        unread.sort_unstable_by_key(|(index, ..)| *index);
+        unread
+    }
+
+    /// Takes in the diff of the opened entry of the changes of the block at `index`, as the device
+    /// of the session answered, or why it did not.
+    pub fn read_changes(
+        &mut self,
+        index: usize,
+        diff: Result<Vec<FileDiff>, String>,
+        transcript: &Transcript,
+    ) {
+        let (Some(opened), Some(block)) = (
+            self.opened_changes.get_mut(&index),
+            transcript.blocks().get(index),
+        ) else {
+            return;
+        };
+        *opened = Some(diff);
+        self.lay_out_again(index, block);
+    }
+
+    /// Lays out the entry of the block at `index` again, in place; returns its first line. It
+    /// shows something either way, so the blank lines around it stay as they are.
+    fn lay_out_again(&mut self, index: usize, block: &Block) -> Option<usize> {
+        let old = self.entries.get(index)?.lines.clone();
         let (text, extent) = self.lay_out(index, block);
-        // Abridged or in full, it shows something: the blank lines around it stay as they are.
         let lines = super::draw::ansi_text(&text).lines;
         let new = old.start..old.start + lines.len();
         self.lines.splice(old.clone(), lines);
@@ -221,6 +288,7 @@ impl TranscriptLines {
     /// before it and the layout is the same.
     pub fn set_all(&mut self) {
         self.by_hand.clear();
+        self.opened_changes.clear();
         self.cursor = EntryCursor::Last;
         self.forget_lines();
     }

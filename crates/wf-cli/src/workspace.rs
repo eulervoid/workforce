@@ -17,7 +17,7 @@ use wf_daemon::caller::Caller;
 use wf_daemon::client::{ClientError, DaemonClient};
 use wf_daemon::data_dir::DataDirError;
 use wf_daemon::proto::{
-    EndAnswer, HeldPermission, LiveDiff, ProtoError, SnapshotDiff, TranscriptCopy,
+    ChangesDiff, EndAnswer, HeldPermission, LiveDiff, ProtoError, SnapshotDiff, TranscriptCopy,
 };
 use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
@@ -542,6 +542,27 @@ impl Workspace {
                 self.workforce,
                 item,
                 at,
+            )?)),
+        }
+    }
+
+    /// What the snapshot `snapshot` of `session` on `item` changed against `against`, which the
+    /// daemon asks the device of the session for; `None` without a daemon.
+    pub fn snapshot_changes(
+        &self,
+        item: ItemId,
+        session: SessionId,
+        against: wf_core::session::GitOid,
+        snapshot: wf_core::session::GitOid,
+    ) -> anyhow::Result<Option<ChangesDiff>> {
+        match &self.source {
+            Source::Local(..) => Ok(None),
+            Source::Daemon { client, .. } => Ok(Some(client.borrow_mut().snapshot_changes(
+                self.workforce,
+                item,
+                session,
+                against,
+                snapshot,
             )?)),
         }
     }

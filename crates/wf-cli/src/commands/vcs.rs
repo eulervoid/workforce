@@ -2,12 +2,12 @@
 
 use anyhow::bail;
 use serde::Serialize;
-use wf_core::id::{CommentId, HashId, ItemId};
+use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::DeviceKey;
 use wf_core::review::ReviewStatus;
 use wf_core::session::{CommitId, GitOid, SessionRole};
-use wf_daemon::proto::{LiveDiff, SnapshotDiff};
-use wf_net::{DiffAnswer, Uncommitted, WorkAt};
+use wf_daemon::proto::{ChangesDiff, LiveDiff, SnapshotDiff};
+use wf_net::{ChangesAnswer, DiffAnswer, Uncommitted, WorkAt};
 
 use super::emit;
 use super::item::{Scope, choose_item};
@@ -221,6 +221,45 @@ pub(crate) fn comment_work(
             bail!("the device answered that nothing changed, which was not asked")
         }
         SnapshotDiff::Unreachable { device, reason } => bail!(
+            "the session ran on {}, which cannot be reached: {reason}",
+            label(device)
+        ),
+    }
+}
+
+/// What the snapshot `snapshot` of `session` changed against `against`, the snapshot before it,
+/// from the device of the session (SPEC §10).
+pub(crate) fn snapshot_changes(
+    workspace: &Workspace,
+    session: SessionId,
+    against: GitOid,
+    snapshot: GitOid,
+) -> anyhow::Result<Vec<wf_vcs::diff::FileDiff>> {
+    let Some(item) = workspace
+        .state()
+        .session(session)
+        .map(|session| session.item())
+    else {
+        bail!("session {} is not known here", session.short());
+    };
+    let Some(diff) = workspace.snapshot_changes(item, session, against, snapshot)? else {
+        bail!("what a block changed is read through the daemon, which is not running");
+    };
+    let label = |device| crate::view::device_label(workspace.state(), device);
+    match diff {
+        ChangesDiff::Answer(ChangesAnswer::Changes(diff)) => Ok(wf_vcs::diff::parse(&diff)),
+        ChangesDiff::Answer(ChangesAnswer::NotHere) => bail!(
+            "the device of the session, {}, has no such snapshot",
+            workspace
+                .state()
+                .session(session)
+                .map(|session| label(session.device()))
+                .unwrap_or_default()
+        ),
+        ChangesDiff::Answer(ChangesAnswer::TooLarge) => {
+            bail!("the diff is too large to show from its device")
+        }
+        ChangesDiff::Unreachable { device, reason } => bail!(
             "the session ran on {}, which cannot be reached: {reason}",
             label(device)
         ),

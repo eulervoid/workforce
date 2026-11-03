@@ -8,6 +8,7 @@ use serde_json::Value;
 use similar::TextDiff;
 use wf_core::session::{ChangedFile, FileChange};
 use wf_harness::{Decider, Decision, Permission};
+use wf_vcs::diff::{Content, FileDiff};
 
 use super::{
     Asked, Block, Outcome, PlanEntry, PlanStatus, Prompter, StopReason, Thinking, ToolCall,
@@ -472,6 +473,74 @@ impl Layout {
             }
         }
         out
+    }
+
+    /// The files a snapshot changed, opened to their diff: each header with its lines under it,
+    /// once the device of the session sent them; until then, or when it could not, the headers
+    /// and why there are no lines.
+    pub fn opened_changes(
+        &self,
+        files: &[ChangedFile],
+        diff: Option<&Result<Vec<FileDiff>, String>>,
+    ) -> String {
+        let mut out = self.changes_title(files);
+        let (note, style) = match diff {
+            Some(Ok(diffs)) => {
+                for diff in diffs {
+                    out.push_str(&self.changed_file(&diff.changed()));
+                    out.push_str(&self.file_lines(diff));
+                }
+                return out;
+            }
+            Some(Err(error)) => (format!("no diff: {error}"), theme::error()),
+            None => ("asking for the diff…".to_owned(), theme::text_dimmed()),
+        };
+        for file in files {
+            out.push_str(&self.changed_file(file));
+        }
+        for line in self.fit(&note, NESTED, true) {
+            out.push_str(&format!(
+                "{}{}\n",
+                " ".repeat(NESTED),
+                self.styled(&line, style)
+            ));
+        }
+        out
+    }
+
+    /// The lines of the hunks of `diff`, as under an edit.
+    fn file_lines(&self, diff: &FileDiff) -> String {
+        let Content::Text(hunks) = &diff.content else {
+            return self.guttered(vec![Line::Text("binary".to_owned())], Gutter::Blank, |_| {
+                theme::text_dimmed()
+            });
+        };
+        let body: Vec<String> = hunks
+            .iter()
+            .enumerate()
+            .flat_map(|(index, hunk)| {
+                let gap = (index > 0).then(|| "⋯".to_owned());
+                gap.into_iter().chain(
+                    hunk.lines
+                        .iter()
+                        .map(|line| format!("{}{}", line.marker(), line.text())),
+                )
+            })
+            .collect();
+        let lines = self.fit(&body.join("\n"), NESTED + GUTTER, false);
+        self.guttered(
+            lines.into_iter().map(Line::Text).collect(),
+            Gutter::Blank,
+            |line| {
+                if line.starts_with('+') {
+                    theme::diff_added()
+                } else if line.starts_with('-') {
+                    theme::diff_removed()
+                } else {
+                    theme::text_dimmed()
+                }
+            },
+        )
     }
 
     fn changes_title(&self, files: &[ChangedFile]) -> String {
