@@ -994,6 +994,76 @@ wf work release --note \"stopping\"
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_transcript_records_a_snapshot_of_uncommitted_work_at_comments_and_turn_ends_that_changed_it()
+ {
+    let script = "\
+sh echo one > edit.txt && \"$WF_BIN\" comment {item} \"editing\"
+turn
+sh echo two > edit.txt
+turn
+say nothing changed
+turn
+wf work release --note \"stopping\"
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Edit without committing"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+
+    let workforce_directory = world.bare().parent().unwrap().to_path_buf();
+    let transcripts: Vec<PathBuf> = std::fs::read_dir(workforce_directory.join("transcripts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .collect();
+    let [transcript] = transcripts.as_slice() else {
+        panic!("one transcript: {transcripts:?}");
+    };
+    let snapshots: Vec<Value> = std::fs::read_to_string(transcript)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|entry| entry["direction"] == "wf" && entry["message"]["snapshot"].is_string())
+        .map(|entry| entry["message"].clone())
+        .collect();
+    assert_eq!(
+        snapshots
+            .iter()
+            .map(|snapshot| snapshot["at"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["comment", "turn_end"],
+        "the turn end after the comment and the one that changed nothing record none: {snapshots:?}"
+    );
+    let comment = logged_events(&world)
+        .iter()
+        .find_map(|event| {
+            let EventBody::Commented(comment) = &event.content.body else {
+                return None;
+            };
+            (comment.text == "editing").then(|| wf_core::id::CommentId::from(event.id()))
+        })
+        .expect("the comment");
+    assert_eq!(
+        snapshots[0]["comment"],
+        wf_core::id::HashId::to_base32(&comment)
+    );
+    let snapshot_repository = workforce_directory.join("snapshots").join(&item[..12]);
+    let edited = |snapshot: &Value| {
+        let tree = snapshot["snapshot"].as_str().unwrap();
+        git_in(
+            &snapshot_repository,
+            &["cat-file", "blob", &format!("{tree}:edit.txt")],
+        )
+    };
+    assert_eq!(edited(&snapshots[0]), "one");
+    assert_eq!(edited(&snapshots[1]), "two");
+    assert_eq!(snapshots[1]["left_out"], serde_json::json!([]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_work_session_without_commits_names_no_head() {
     let script = "\
 wf comment {item} \"nothing yet\"

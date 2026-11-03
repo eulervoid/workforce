@@ -12,6 +12,7 @@ mod merge;
 mod offered;
 mod repositories;
 mod resume;
+mod snapshots;
 mod start;
 mod submit;
 mod target;
