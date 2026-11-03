@@ -12,6 +12,8 @@ requests for its agents. Each agent says how, with `--permissions` on `wf agent 
 
 `allow` is safe because agents run in a sandbox (see [machine-config.md](machine-config.md#the-sandbox)).
 With `[sandbox] kind = "off"`, an agent runs with your privileges, so wf treats `allow` as `ask`.
+With `kind = "external"`, the machine is the sandbox (a container or a virtual machine), and `allow`
+stays `allow`.
 
 ## Answering a request
 

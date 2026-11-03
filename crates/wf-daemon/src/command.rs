@@ -287,7 +287,7 @@ impl Confinement<'_> {
                     }
                 })?
             }
-            SandboxConfig::Off {} => command,
+            SandboxConfig::Off {} | SandboxConfig::External {} => command,
         };
         let mut environment = (*environment).clone();
         environment.set.remove(CARGO_TARGET_DIR);

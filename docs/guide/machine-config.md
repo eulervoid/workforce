@@ -79,6 +79,10 @@ each permission request goes through the deciders and then to you. `allow_write`
 `allow_domains` are refused with `kind = "off"`, since there is nothing to add them to; agents then
 use your own harness directories and caches.
 
+`kind = "external"` is for a machine that is a sandbox itself, such as a container or a virtual
+machine: agents run without Fence, as with `"off"`, but an agent set to `allow` is allowed what it
+asks without anyone being asked. Whatever the machine can reach, its agents can reach too.
+
 ### Harness logins
 
 The harness's directory of wf's is shared by the agents of the machine, so it is set up once. Your

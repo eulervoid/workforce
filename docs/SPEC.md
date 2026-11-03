@@ -1495,7 +1495,7 @@ the principal with the reason. A mistake in `[theme]` only warns and keeps the b
 
 | Section | Sets |
 |---|---|
-| `[sandbox]` | `kind = "fence"` (default) with `allow_write` and `allow_domains`, or `"off"` |
+| `[sandbox]` | `kind = "fence"` (default) with `allow_write` and `allow_domains`, `"off"`, or `"external"` |
 | `[environment]` | `inherit` from the daemon's environment, `set` values (with `~`, `$NAME` expanded) |
 | `[agent.<name>]` | more `environment` and `sandbox` for one agent |
 | `[commits]` | `agent_signing`, `merge_signing` (section 10) |
@@ -1509,7 +1509,9 @@ the principal with the reason. A mistake in `[theme]` only warns and keeps the b
 
 The daemon runs every harness in **Fence**, with a profile it writes per session from Fence's `code`
 template. Without Fence installed, sessions fail; there is no silent fallback. `kind = "off"` runs
-agents with the principal's privileges, and then `allow` is treated as `ask`.
+agents with the principal's privileges, and then `allow` is treated as `ask`. `kind = "external"`
+runs them without Fence too, on a machine that is a sandbox itself (a container, a virtual machine),
+and keeps `allow`.
 
 * **Write:** the session's directory (its own repository, whole: `.git` included), temporary files,
   the daemon's socket, the directory of the session's harness in wf's data directory

@@ -70,6 +70,7 @@ impl FailedCheck {
         let sandbox = match self.sandbox {
             SandboxConfig::Fence(_) => "Fence",
             SandboxConfig::Off {} => "none",
+            SandboxConfig::External {} => "the machine's own",
         };
         format!(
             "{what}\n\nCommand: `{}`\nTree: {}\nSandbox: {sandbox}\nLog: {}\n\n```\n{}\n```",

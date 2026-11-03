@@ -57,7 +57,7 @@ pub(crate) fn sandboxed_in(
             return Err("Fence is not installed".to_string());
         }
         SandboxConfig::Fence(config) => config,
-        SandboxConfig::Off {} => return Ok(agent),
+        SandboxConfig::Off {} | SandboxConfig::External {} => return Ok(agent),
     };
     let access = crate::sandbox::Access {
         directory,
@@ -110,7 +110,7 @@ impl Daemon {
             SandboxConfig::Fence(_) if !crate::sandbox::fence_installed() => {
                 return Err(SessionError::NoFence);
             }
-            SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
+            SandboxConfig::Fence(_) | SandboxConfig::Off {} | SandboxConfig::External {} => {}
         }
         let policy = &state.policy().ok_or(SessionError::NoPolicy)?.policy;
         let item_context = match state.item(item).ok_or(SessionError::UnknownItem(item))? {

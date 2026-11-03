@@ -583,7 +583,7 @@ fn login_lapsed(daemon: &Daemon, run: &Run, error: &wf_harness::Error) -> End {
                 what = format!("{what}; {help}");
             }
         }
-        (SandboxConfig::Fence(_) | SandboxConfig::Off {}, _) => {}
+        (SandboxConfig::Fence(_) | SandboxConfig::Off {} | SandboxConfig::External {}, _) => {}
     }
     harness_fault(daemon, run, HarnessFault::LoginLapsed, what)
 }

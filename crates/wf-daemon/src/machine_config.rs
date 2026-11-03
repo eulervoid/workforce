@@ -250,6 +250,9 @@ pub enum SandboxConfig {
     /// Agents run with the privileges of the daemon, so an agent that is allowed everything is
     /// asked instead. A struct variant, so that unknown fields are refused.
     Off {},
+    /// Agents run without Fence in a sandbox around the whole machine, such as a container or a
+    /// virtual machine, so an agent that is allowed everything is not asked.
+    External {},
 }
 
 impl Default for SandboxConfig {
@@ -265,7 +268,7 @@ impl SandboxConfig {
         match (self, mode) {
             (SandboxConfig::Off {}, PermissionMode::Allow) => PermissionMode::Ask,
             (SandboxConfig::Off {}, PermissionMode::Ask | PermissionMode::Deny)
-            | (SandboxConfig::Fence(_), _) => mode,
+            | (SandboxConfig::Fence(_) | SandboxConfig::External {}, _) => mode,
         }
     }
 }
@@ -433,12 +436,14 @@ impl MachineConfig {
                 ParseError::Invalid(format!("[agent.{agent}.environment]: {problem}"))
             })?;
             match &config.sandbox {
-                SandboxConfig::Off {} if agent_config.sandbox != FenceConfig::default() => {
+                SandboxConfig::Off {} | SandboxConfig::External {}
+                    if agent_config.sandbox != FenceConfig::default() =>
+                {
                     return Err(ParseError::Invalid(format!(
-                        "[agent.{agent}.sandbox] adds to what Fence allows, but the sandbox is off"
+                        "[agent.{agent}.sandbox] adds to what Fence allows, but agents do not run in Fence"
                     )));
                 }
-                SandboxConfig::Off {} | SandboxConfig::Fence(_) => {}
+                SandboxConfig::Off {} | SandboxConfig::External {} | SandboxConfig::Fence(_) => {}
             }
         }
         config.environment.expand(variable)?;
@@ -634,6 +639,19 @@ mod tests {
         assert_eq!(off.permissions(PermissionMode::Allow), PermissionMode::Ask);
         assert_eq!(off.permissions(PermissionMode::Deny), PermissionMode::Deny);
         assert!(MachineConfig::parse("[sandbox]\nkind = \"off\"\nallow_domains = []\n").is_err());
+
+        let external = MachineConfig::parse("[sandbox]\nkind = \"external\"\n")
+            .ok()
+            .unwrap()
+            .sandbox;
+        assert_eq!(external, SandboxConfig::External {});
+        assert_eq!(
+            external.permissions(PermissionMode::Allow),
+            PermissionMode::Allow
+        );
+        assert!(
+            MachineConfig::parse("[sandbox]\nkind = \"external\"\nallow_write = []\n").is_err()
+        );
     }
 
     #[test]

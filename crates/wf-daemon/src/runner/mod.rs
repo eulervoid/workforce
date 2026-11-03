@@ -335,6 +335,7 @@ impl Run {
                 SandboxConfig::Off {},
                 wf_core::autonomy::PermissionMode::Ask | wf_core::autonomy::PermissionMode::Deny,
             ) => " without a sandbox",
+            (SandboxConfig::External {}, _) => " in the machine's own sandbox",
         }
     }
 }
