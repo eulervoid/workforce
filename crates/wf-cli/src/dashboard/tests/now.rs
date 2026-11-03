@@ -403,7 +403,7 @@ fn right_on_a_session_opens_its_item_then_its_transcript_and_esc_goes_back_to_th
     app.refresh(with_session);
     let shown = screen(&mut app, 60, 16);
     assert!(
-        shown.contains(&format!("Now › #{item} ›▐coder/{session} · 12m ◆▌")),
+        shown.contains(&format!("Now › #{item} ›▐◆ coder/{session} · 12m▌")),
         "{shown}"
     );
     assert!(shown.contains("The loader now defers parsing"), "{shown}");

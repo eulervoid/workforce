@@ -101,7 +101,7 @@ fn the_last_part_of_the_breadcrumb_has_its_ends_in_its_accent() {
     snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
     app.refresh(snapshot.clone());
     let crumb = &format!(
-        "coder/{} · 40m ◇ parked",
+        "◇ coder/{} · 40m · parked",
         HashId::short(&snapshot.working[1].id)
     );
     // The list has the keys: the ends are dimmed with the rest of the highlight.
@@ -120,9 +120,9 @@ fn a_breadcrumb_cut_short_leaves_out_the_end_of_its_highlight() {
     snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     // Wide enough for the text and its end, for the text only, and for neither.
-    let (column, row) = find(&mut app, 60, 16, "◆▌");
-    let fits = column + 1;
-    for (width, last) in [(fits + 1, "▌"), (fits, "◆"), (fits - 5, "…")] {
+    let (column, row) = find(&mut app, 60, 16, "12m▌");
+    let fits = column + 3;
+    for (width, last) in [(fits + 1, "▌"), (fits, "m"), (fits - 5, "…")] {
         assert_eq!(
             Drawn::of(&mut app, width, 16).symbol_at(width - 1, row),
             last
