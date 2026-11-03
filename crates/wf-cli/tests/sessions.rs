@@ -3402,6 +3402,54 @@ hang
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_comment_shows_the_work_at_it_also_once_the_item_is_merged() {
+    let script = "\
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m \"add hello\"
+wf comment {item} \"wrote hello\"
+sh echo bye > bye.txt && git add bye.txt && git commit -q -m \"add bye\"
+wf comment {item} \"wrote bye\"
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Add hello and bye"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
+    let comment = |text: &str| {
+        logged_events(&world)
+            .iter()
+            .find_map(|event| {
+                let EventBody::Commented(comment) = &event.content.body else {
+                    return None;
+                };
+                (comment.text == text).then(|| {
+                    wf_core::id::HashId::to_base32(&wf_core::id::CommentId::from(event.id()))
+                })
+            })
+            .unwrap()
+    };
+    let at = |text: &str| {
+        let comment = comment(text);
+        world
+            .wf
+            .json(&["item", "diff", "--at", &comment[..8], short(&item)])
+    };
+
+    let diff = at("wrote hello");
+    let committed = diff["committed"].as_str().unwrap();
+    assert!(committed.contains("+hi"), "{diff}");
+    assert!(!committed.contains("+bye"), "{diff}");
+    let diff = at("wrote bye");
+    let committed = diff["committed"].as_str().unwrap();
+    assert!(
+        committed.contains("+hi") && committed.contains("+bye"),
+        "{diff}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_work_of_a_merged_item_is_what_its_merge_brought_in() {
     let script = "\
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m \"add hello\"

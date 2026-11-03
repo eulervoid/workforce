@@ -36,7 +36,7 @@ pub enum LiveDiffError {
     Task(#[source] tokio::task::JoinError),
 }
 
-fn target_of(state: &State) -> Option<String> {
+pub(crate) fn target_of(state: &State) -> Option<String> {
     state
         .policy()
         .map(|config| config.policy.merge.target.clone())
@@ -257,14 +257,18 @@ fn read_snapshot(
         return Ok(DiffAnswer::NotHere);
     };
     let git = GitCli::open(&wf_vcs::bare_repository(&workforce_directory))?;
-    let work = wf_vcs::Work::Unmerged {
-        target: target.to_string(),
-        commit: head,
+    // Against the target as it was: once the item is merged, the target has every recorded head.
+    let committed = match recorded.base {
+        Some(base) => git.parseable_diff_between(base, head)?,
+        None => git.parseable_diff(&wf_vcs::Work::Unmerged {
+            target: target.to_string(),
+            commit: head,
+        })?,
     };
     Ok(DiffAnswer::Work(Work {
         target: target.to_string(),
         head,
-        committed: git.parseable_diff(&work)?,
+        committed,
         uncommitted: Some(Uncommitted {
             snapshot: recorded.tree,
             diff: wf_vcs::snapshot_diff(&workforce_directory, item, head, recorded.tree)?,

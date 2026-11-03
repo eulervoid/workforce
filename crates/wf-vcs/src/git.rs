@@ -966,6 +966,21 @@ impl GitCli {
         let args = diff::ARGS.map(String::from);
         self.diff(work, &args)
     }
+
+    /// What `commit` changes from `base`, `<base> <commit>`, in the form [`diff::parse`] reads.
+    pub fn parseable_diff_between(
+        &self,
+        base: CommitId,
+        commit: CommitId,
+    ) -> Result<String, VcsError> {
+        let (base, commit) = (base.to_string(), commit.to_string());
+        self.run(
+            &self.repository,
+            &[],
+            ["diff", &base, &commit].into_iter().chain(diff::ARGS),
+        )?
+        .ok()
+    }
 }
 
 /// A file the index still has unmerged, with the sides the rebase could not combine.

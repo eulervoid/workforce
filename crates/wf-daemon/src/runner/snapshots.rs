@@ -12,6 +12,7 @@ use wf_harness::{Direction, TranscriptEntry};
 use wf_vcs::{GitCli, Snapshot};
 
 use super::blocking;
+use crate::live_diff::target_of;
 use crate::{Daemon, Loaded};
 
 /// Where in a work session a snapshot is taken.
@@ -23,18 +24,21 @@ pub(super) enum SnapshotPoint {
     TurnEnd,
 }
 
-/// `{"snapshot": <tree>, "head": <commit>?, "at": "comment" | "turn_end", "comment": <id>?,
-/// "left_out": [...]}`, written by wf. `head` is where the item's branch was, which the uncommitted
-/// part of the snapshot is against.
+/// `{"snapshot": <tree>, "head": <commit>?, "base": <commit>?, "at": "comment" | "turn_end",
+/// "comment": <id>?, "left_out": [...]}`, written by wf. `head` is where the item's branch was,
+/// which the uncommitted part of the snapshot is against; `base` is where it left the target then,
+/// which the committed part is against, also once the item is merged.
 fn snapshot_entry(
     at: Timestamp,
     snapshot: &Snapshot,
     head: Option<CommitId>,
+    base: Option<CommitId>,
     point: SnapshotPoint,
 ) -> TranscriptEntry {
     let mut message = serde_json::json!({
         "snapshot": snapshot.tree.to_string(),
         "head": head.map(|head| head.to_string()),
+        "base": base.map(|base| base.to_string()),
         "left_out": snapshot.left_out,
     });
     match point {
@@ -57,6 +61,9 @@ pub(crate) struct RecordedSnapshot {
     pub(crate) tree: GitOid,
     /// Where the item's branch was; `None` when it had none.
     pub(crate) head: Option<CommitId>,
+    /// The merge base of `head` with the target then; `None` when there was no head, no target or
+    /// no common history, or the entry is older than this field.
+    pub(crate) base: Option<CommitId>,
 }
 
 /// The snapshot that `at` names in `transcript`, the lines of the transcript of its session:
@@ -94,11 +101,17 @@ fn recorded(entry: &TranscriptEntry) -> Option<RecordedSnapshot> {
         Direction::ToAgent | Direction::FromAgent | Direction::AgentLog => return None,
     }
     let tree = entry.message["snapshot"].as_str()?.parse().ok()?;
-    let head = entry.message["head"]
-        .as_str()
-        .and_then(|head| head.parse().ok())
-        .map(CommitId::Git);
-    Some(RecordedSnapshot { tree, head })
+    let commit = |field: &str| {
+        entry.message[field]
+            .as_str()
+            .and_then(|commit| commit.parse().ok())
+            .map(CommitId::Git)
+    };
+    Some(RecordedSnapshot {
+        tree,
+        head: commit("head"),
+        base: commit("base"),
+    })
 }
 
 /// Whether `entry` prompts the agent: a turn begins.
@@ -128,6 +141,7 @@ impl Daemon {
     pub(super) async fn snapshot_work(
         &self,
         workforce: WorkforceId,
+        loaded: &Loaded,
         item: ItemId,
         session: SessionId,
         point: SnapshotPoint,
@@ -136,6 +150,7 @@ impl Daemon {
         let _taking = self.snapshotting.lock(session).await;
         let workforce_directory = self.workforce_directory(workforce);
         let transcript = self.launch.data_dir.transcript(&workforce, session);
+        let target = self.read(loaded, target_of).await.ok().flatten();
         let recorded = blocking(move || {
             let snapshot = wf_vcs::take_snapshot(&workforce_directory, item, session)
                 .map_err(|error| wf_core::error_chain(&error))?;
@@ -146,12 +161,21 @@ impl Daemon {
                 SnapshotPoint::TurnEnd => {}
             }
             // The import before the snapshot moved the branch to what the agent committed.
-            let head = GitCli::open(&wf_vcs::bare_repository(&workforce_directory))
-                .and_then(|git| git.branch_head(&wf_vcs::item_branch(item)))
-                .ok();
+            let git = GitCli::open(&wf_vcs::bare_repository(&workforce_directory)).ok();
+            let head = git
+                .as_ref()
+                .and_then(|git| git.branch_head(&wf_vcs::item_branch(item)).ok());
+            let base = match (&git, head, &target) {
+                (Some(git), Some(head), Some(target)) => git
+                    .branch_head(target)
+                    .and_then(|target| git.merge_base(target, head))
+                    .ok()
+                    .flatten(),
+                _ => None,
+            };
             append(
                 &transcript,
-                &snapshot_entry(Timestamp::now(), &snapshot, head, point),
+                &snapshot_entry(Timestamp::now(), &snapshot, head, base, point),
             )
             .map_err(|error| format!("cannot write {}: {error}", transcript.display()))?;
             // Only a snapshot in the transcript is the previous one of the next, so that one not
@@ -193,7 +217,7 @@ impl Daemon {
             return;
         }
         let point = SnapshotPoint::Comment(CommentId::from(event.id()));
-        self.snapshot_work(workforce, comment.item, session, point)
+        self.snapshot_work(workforce, loaded, comment.item, session, point)
             .await;
     }
 }
@@ -219,7 +243,8 @@ mod tests {
             previous: None,
         };
         let head = Some(CommitId::Git(tree(byte + 100)));
-        snapshot_entry(Timestamp::UNIX_EPOCH, &snapshot, head, point)
+        let base = Some(CommitId::Git(tree(byte + 200)));
+        snapshot_entry(Timestamp::UNIX_EPOCH, &snapshot, head, base, point)
     }
 
     fn to_agent(message: serde_json::Value) -> TranscriptEntry {
@@ -241,6 +266,7 @@ mod tests {
         Some(RecordedSnapshot {
             tree: tree(tree_byte),
             head: Some(CommitId::Git(tree(tree_byte + 100))),
+            base: Some(CommitId::Git(tree(tree_byte + 200))),
         })
     }
 

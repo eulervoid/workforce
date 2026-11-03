@@ -1197,16 +1197,17 @@ was when it was written.
   config, hooks and filters play no part; `.gitignore` and `.gitattributes` among the files apply
   as in a commit. A file over 8 MiB is left out and the snapshot names it as left out.
 * **Recorded** in the session's transcript as an entry written by wf
-  (`{"snapshot": <tree>, "head": <commit>?, "at": "block" | "comment" | "turn_end", "comment":
-  <id>?, "left_out": [<path>, ...]}`, `head` where the item's branch was), at a comment always, so
+  (`{"snapshot": <tree>, "head": <commit>?, "base": <commit>?, "at": "block" | "comment" |
+  "turn_end", "comment": <id>?, "left_out": [<path>, ...]}`, `head` where the item's branch was,
+  `base` its merge base with the target then), at a comment always, so
   that the comment finds it, and otherwise only when the tree differs from the session's previous
   recorded snapshot. Snapshots never enter the log: no other
   device has their objects, and the log names only what every device can fetch. Other devices ask
   for their diffs over `wf/query/2` (section 14).
 * **Shown:** the transcript shows under each block the diff of its snapshot against the one before
   (the session's first against the branch's head when it started); a comment by a work session
-  shows the work at its snapshot against the target, committed and uncommitted apart (against its
-  `head`). A comment resolving a blocker that parked a session shows the snapshot the session parked
+  shows the work at its snapshot against the target, committed (from its `base`, so a later merge
+  leaves it as it was) and uncommitted (against its `head`) apart. A comment resolving a blocker that parked a session shows the snapshot the session parked
   on, which is the work as the one who resolved it saw it, as a parked session changes nothing. The
   live diff's uncommitted part is the latest snapshot against the head. In the dashboard, `w` on an
   item opens a chooser of its comments that show work, the newest first, and in the item's detail the
