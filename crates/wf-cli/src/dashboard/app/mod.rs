@@ -445,9 +445,9 @@ impl App {
         self.moved_back.extend(moves);
     }
 
-    /// Asks the principal to pick one of `choice`.
-    pub fn choose(&mut self, choice: Choice) {
-        self.prompt = Some(Prompt::Choose(choice));
+    /// Asks the principal what `prompt` asks.
+    pub fn ask(&mut self, prompt: Prompt) {
+        self.prompt = Some(prompt);
     }
 
     pub fn resize(&mut self, width: u16, height: u16) {

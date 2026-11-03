@@ -20,7 +20,7 @@ use self::detail::{draw_detail, draw_log};
 use self::lists::{
     ListLines, agents_lines, draw_indicator, draw_list, items_lines, now_lines, row,
 };
-use self::popups::{draw_choice, draw_keys, draw_prompt};
+use self::popups::{draw_choice, draw_keys, draw_prompt, draw_set};
 use crate::dashboard::app::{App, Clickable, Drawn, DrawnDetail, Hovered, Prompt, STRIP, Tab};
 use crate::dashboard::links;
 use crate::theme;
@@ -100,7 +100,7 @@ impl KeysAt {
                 | Prompt::LineComment { .. }
                 | Prompt::Stop { .. },
             ) => KeysAt::Footer,
-            Some(Prompt::Choose(_)) => KeysAt::Choice,
+            Some(Prompt::Choose(_) | Prompt::Set(_)) => KeysAt::Choice,
             Some(Prompt::Keys) => KeysAt::Keys,
             None => match (app.tab, app.list_has_keys()) {
                 (Tab::Now | Tab::Items | Tab::Agents | Tab::Log, true) => KeysAt::List,
@@ -214,18 +214,38 @@ pub(super) fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     shown.clickable.spots.extend(warning.clone());
     match &app.prompt {
         Some(Prompt::Choose(choice)) => {
-            draw_choice(frame, choice, accent(app, KeysAt::Choice), body, app.base);
+            let options = draw_choice(frame, choice, accent(app, KeysAt::Choice), body, app.base);
+            shown.clickable.choice = Some(options);
+            let hint = if choice.is_numbered() {
+                " j/k move · enter or number pick · esc cancel"
+            } else {
+                " j/k move · enter pick · esc cancel"
+            };
             frame.render_widget(
-                Paragraph::new(
-                    Line::from(" j/k move · enter pick · esc cancel").themed(theme::text_dimmed()),
-                ),
+                Paragraph::new(Line::from(hint).themed(theme::text_dimmed())),
                 keys,
             );
         }
+        Some(prompt @ Prompt::Set(input)) => {
+            let values = draw_set(frame, input, accent(app, KeysAt::Choice), body, app.base);
+            shown.clickable.choice = Some(values);
+            draw_prompt(frame, app, prompt, keys);
+        }
         Some(Prompt::Keys) => {
-            draw_keys(frame, accent(app, KeysAt::Keys), body, app.base);
+            let left_out = draw_keys(
+                frame,
+                app.keys_place(),
+                accent(app, KeysAt::Keys),
+                body,
+                app.base,
+            );
+            let hint = if left_out {
+                " any key closes · a wider window shows more"
+            } else {
+                " any key closes"
+            };
             frame.render_widget(
-                Paragraph::new(Line::from(" any key closes").themed(theme::text_dimmed())),
+                Paragraph::new(Line::from(hint).themed(theme::text_dimmed())),
                 keys,
             );
         }

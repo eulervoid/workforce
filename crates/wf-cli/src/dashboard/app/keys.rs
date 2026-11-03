@@ -8,8 +8,9 @@ use wf_harness::Permission;
 
 use super::effect::Effect;
 use super::nav::{Navigated, Opened, Pane, Scroll};
-use super::prompt::{Filtered, Prompt, Written};
+use super::prompt::{Field, Filtered, Prompt, Written};
 use super::{App, GROUPINGS, ORDERS, Split, Status, Tab};
+use crate::dashboard::hint::Place;
 use crate::dashboard::snapshot::{Detail, InView};
 use crate::dashboard::transcript_lines::TranscriptLines;
 use crate::transcript::Verbosity;
@@ -56,8 +57,10 @@ impl App {
             return effect;
         }
         // In a diff, `v` selects lines, as in vim, and `R` asks for the verdict; `c` and `r`
-        // write about the lines; `e` and `d` edit and drop a draft of the review.
-        if matches!(key.code, KeyCode::Char('v' | 'c' | 'r' | 'e' | 'd')) && self.diff_has_keys() {
+        // write about the lines; `e` and `d` edit and drop a draft of the review; `p` pages it.
+        if matches!(key.code, KeyCode::Char('v' | 'c' | 'r' | 'e' | 'd' | 'p'))
+            && self.diff_has_keys()
+        {
             return self.detail_key(key);
         }
         match self.act(key) {
@@ -113,6 +116,23 @@ impl App {
             }
             Split::One if self.pane_with_keys() != towards => self.split = Split::Both,
             Split::One => {}
+        }
+    }
+
+    /// Where the keys are, for the keys popup to show the keys of first.
+    pub fn keys_place(&self) -> Place {
+        if !self.list_has_keys() {
+            return match self.stack().last().map(|opened| &opened.detail) {
+                Some(Detail::Item(_)) => Place::Item,
+                Some(Detail::Session(_)) => Place::Transcript,
+                Some(Detail::Diff(_)) => Place::Diff,
+                Some(Detail::Agent(_) | Detail::Flag(_)) | None => Place::Everywhere,
+            };
+        }
+        match self.tab {
+            Tab::Items => Place::Items,
+            Tab::Now if !self.subjects().is_empty() => Place::Waiting,
+            Tab::Now | Tab::Agents | Tab::Log => Place::Everywhere,
         }
     }
 
@@ -180,11 +200,16 @@ impl App {
             KeyCode::Char('s') => {
                 Acted::from(self.item_subject().map(|item| Effect::ChooseStart { item }))
             }
-            KeyCode::Char('m') => {
-                Acted::from(self.item_subject().map(|item| Effect::ChooseState { item }))
+            KeyCode::Char(key @ ('e' | 'm' | 'p')) => {
+                let field = match key {
+                    'e' => Field::Text,
+                    'm' => Field::State,
+                    _ => Field::Priority,
+                };
+                Acted::from(self.item_subject().map(|item| Effect::Edit { item, field }))
             }
-            KeyCode::Char('e') => {
-                Acted::from(self.item_subject().map(|item| Effect::Edit { item }))
+            KeyCode::Char('E') => {
+                Acted::from(self.item_subject().map(|item| Effect::ChooseField { item }))
             }
             KeyCode::Char('c') => {
                 let Some(item) = self.item_subject() else {

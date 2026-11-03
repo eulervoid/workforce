@@ -1,7 +1,9 @@
 //! Dashboard tests: items.
 
 use super::support::*;
-use crate::dashboard::app::{App, Choice, Effect, NowRow, Opened, Prompt, Scroll, Split, Starter};
+use crate::dashboard::app::{
+    App, Choice, Effect, Field, NowRow, Opened, Prompt, Scroll, Split, Starter,
+};
 use crate::dashboard::snapshot::Detail;
 use crate::theme;
 use ratatui::crossterm::event::KeyCode;
@@ -241,14 +243,14 @@ fn item_keys_act_on_the_selected_item() {
         press(&mut app, KeyCode::Char('s')),
         Some(Effect::ChooseStart { item: dashboard })
     );
-    app.choose(Choice::Start {
+    app.ask(Prompt::Choose(Choice::Start {
         item: dashboard,
         starters: vec![
             Starter::Agent(AgentName::new("coder").unwrap()),
             Starter::Agent(AgentName::new("reviewer").unwrap()),
         ],
         index: 0,
-    });
+    }));
     insta::assert_snapshot!("choose_agent", screen(&mut app, 60, 12));
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(
@@ -260,13 +262,16 @@ fn item_keys_act_on_the_selected_item() {
     );
     assert_eq!(
         press(&mut app, KeyCode::Char('m')),
-        Some(Effect::ChooseState { item: dashboard })
+        Some(Effect::Edit {
+            item: dashboard,
+            field: Field::State
+        })
     );
-    app.choose(Choice::State {
+    app.ask(Prompt::Choose(Choice::State {
         item: dashboard,
         states: vec![ItemState::Draft, ItemState::Done, ItemState::Cancelled],
         index: 0,
-    });
+    }));
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(
         press(&mut app, KeyCode::Enter),
@@ -275,14 +280,14 @@ fn item_keys_act_on_the_selected_item() {
             state: ItemState::Done
         })
     );
-    app.choose(Choice::Start {
+    app.ask(Prompt::Choose(Choice::Start {
         item: dashboard,
         starters: vec![
             Starter::Dispatcher,
             Starter::Agent(AgentName::new("coder").unwrap()),
         ],
         index: 0,
-    });
+    }));
     insta::assert_snapshot!("choose_release", screen(&mut app, 60, 12));
     assert_eq!(
         press(&mut app, KeyCode::Enter),
@@ -305,7 +310,10 @@ fn item_keys_act_on_the_selected_item() {
     );
     assert_eq!(
         press(&mut app, KeyCode::Char('e')),
-        Some(Effect::Edit { item: dashboard })
+        Some(Effect::Edit {
+            item: dashboard,
+            field: Field::Text
+        })
     );
     // An item has no session to stop.
     assert_eq!(press(&mut app, KeyCode::Char('x')), None);
@@ -340,4 +348,34 @@ fn the_keys_show_on_a_question_mark() {
     // Any key closes it, and does nothing else.
     assert_eq!(press(&mut app, KeyCode::Char('q')), None);
     assert!(app.prompt.is_none());
+}
+
+#[test]
+fn the_keys_show_in_sections_those_of_where_the_keys_are_first() {
+    /// The title of the first section: the line after the popup's title.
+    fn first_section(app: &mut App) -> String {
+        press(app, KeyCode::Char('?'));
+        let drawn = Drawn::of(app, 150, 30);
+        press(app, KeyCode::Esc);
+        let lines = drawn.lines();
+        let title = lines.iter().position(|line| line.contains("keys")).unwrap();
+        lines[title + 1]
+            .trim_start_matches(['▎', ' ', '│'])
+            .split("  ")
+            .next()
+            .unwrap()
+            .to_owned()
+    }
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    assert_eq!(first_section(&mut app), "the items list");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(first_section(&mut app), "an item");
+    let mut diff = diff_app();
+    assert_eq!(first_section(&mut diff), "a diff");
+    // In a wide window, every section shows, in columns.
+    let mut app = self::app();
+    press(&mut app, KeyCode::Char('?'));
+    insta::assert_snapshot!("keys_in_columns", screen(&mut app, 180, 30));
 }

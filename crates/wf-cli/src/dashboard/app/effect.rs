@@ -1,5 +1,6 @@
 //! What a key asks of the workforce or the terminal.
 
+use wf_core::event::Change;
 use wf_core::id::{CommentId, ItemId, SessionId};
 use wf_core::item::ItemState;
 use wf_core::name::AgentName;
@@ -7,7 +8,7 @@ use wf_core::session::CommitId;
 use wf_harness::Permission;
 
 use super::clickable::Request;
-use super::prompt::Written;
+use super::prompt::{Field, Written};
 use crate::dashboard::diff::LineComment;
 
 /// What a key asks of the workforce or the terminal.
@@ -67,9 +68,20 @@ pub enum Effect {
     ChooseStart {
         item: ItemId,
     },
-    /// Asks which state to move an item to.
-    ChooseState {
+    /// Asks which field of an item to edit: the edit menu.
+    ChooseField {
         item: ItemId,
+    },
+    /// Edits a field of an item: the title and body in `$EDITOR`, as `wf item edit` does; any
+    /// other by asking for its new value.
+    Edit {
+        item: ItemId,
+        field: Field,
+    },
+    /// Writes the changes to an item as one edit.
+    Change {
+        item: ItemId,
+        changes: Vec<Change>,
     },
     StartSession {
         item: ItemId,
@@ -90,9 +102,5 @@ pub enum Effect {
     CommentInEditor {
         item: ItemId,
         text: String,
-    },
-    /// Edits an item in `$EDITOR`, as `wf item edit` does.
-    Edit {
-        item: ItemId,
     },
 }

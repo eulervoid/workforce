@@ -1,7 +1,7 @@
 //! What the mouse does: the wheel, clicks, moves and drags.
 
 use ratatui::crossterm::event::KeyEvent;
-use ratatui::layout::Position;
+use ratatui::layout::{Position, Rect};
 use wf_harness::Permission;
 
 use super::clickable::{CONFIRM_LASTS_MS, Hovered, Request, Target, UnconfirmedAllow};
@@ -67,6 +67,11 @@ impl App {
     /// keys, and opens it when it was selected already; on the detail beside a list it gives the
     /// detail the keys; on the strip of a pane folded away it brings both back.
     pub fn click(&mut self, column: u16, row: u16) -> Option<Effect> {
+        if let Some(options) = self.clickable.choice
+            && matches!(self.prompt, Some(Prompt::Choose(_) | Prompt::Set(_)))
+        {
+            return self.click_option(options, Position::new(column, row));
+        }
         if !self.mouse_passes() {
             return None;
         }
@@ -142,6 +147,35 @@ impl App {
             self.keys_to_detail();
         }
         None
+    }
+
+    /// A click on the choice or the set input drawn with its options in `options`: an option of
+    /// a choice is picked, as enter picks it; a value of the set input is marked or unmarked, as
+    /// space does. A click beside them does nothing.
+    fn click_option(&mut self, options: Rect, position: Position) -> Option<Effect> {
+        if !options.contains(position) {
+            return None;
+        }
+        let line = usize::from(position.y - options.y);
+        match self.prompt.take() {
+            Some(Prompt::Choose(mut choice)) if line < choice.len() => {
+                *choice.index_mut() = line;
+                choice.picked()
+            }
+            Some(Prompt::Set(mut input)) => {
+                if let Some(&member) = input.listed().get(line) {
+                    input.index = line;
+                    let member = &mut input.members[member];
+                    member.marked = !member.marked;
+                }
+                self.prompt = Some(Prompt::Set(input));
+                None
+            }
+            prompt => {
+                self.prompt = prompt;
+                None
+            }
+        }
     }
 
     /// Does what a click on a link or a button does; `in_detail` when it is in the detail beside
@@ -366,6 +400,7 @@ impl App {
                 | Prompt::Comment { .. }
                 | Prompt::LineComment { .. }
                 | Prompt::Choose(_)
+                | Prompt::Set(_)
                 | Prompt::Stop { .. }
                 | Prompt::Keys,
             ) => false,

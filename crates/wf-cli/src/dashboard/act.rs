@@ -5,15 +5,21 @@ use anyhow::{anyhow, bail};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
-use wf_core::event::{CommentKind, Commented, EventBody, ItemEdited, ItemMoved};
-use wf_core::id::{CommentId, HashId, ItemId, SessionId};
-use wf_core::item::{ItemEntry, ItemState};
-use wf_core::name::AgentName;
+use std::collections::BTreeSet;
+
+use tui_input::Input;
+use wf_core::event::{Change, CommentKind, Commented, EventBody, ItemEdited, ItemMoved};
+use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId};
+use wf_core::item::{Item, ItemEntry, ItemState, Priority};
+use wf_core::name::{AgentName, Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName};
+use wf_core::policy::{Field as PolicyField, Policy, TypeConfig};
 use wf_core::session::{CommitId, SessionRole, Verdict};
 use wf_core::state::State;
 use wf_harness::Permission;
 
-use super::app::{Choice, Effect, Request, Starter, Written};
+use super::app::{
+    Choice, Effect, Field, Inherited, Member, Prompt, Request, Set, SetInput, Starter, Written,
+};
 use super::diff::LineComment;
 use crate::commands::{edit_in_editor, edit_until_valid, item_work, resolving, write_verdict};
 use crate::draft::Draft;
@@ -29,8 +35,8 @@ pub enum Outcome {
     Quit,
     /// What it did, to say so.
     Did(String),
-    /// Something to pick before it can be done.
-    Choose(Choice),
+    /// Something to pick or answer before it can be done.
+    Ask(Prompt),
     /// A comment on lines written in `$EDITOR`, a draft of the review of `item` in place of the
     /// draft `replacing`.
     Drafted {
@@ -56,8 +62,15 @@ pub fn carry_out(
 ) -> anyhow::Result<Outcome> {
     match effect {
         Effect::Quit => Ok(Outcome::Quit),
-        Effect::ChooseStart { item } => Ok(Outcome::Choose(starters(workspace, item)?)),
-        Effect::ChooseState { item } => Ok(Outcome::Choose(states(workspace.state(), item)?)),
+        Effect::ChooseStart { item } => {
+            Ok(Outcome::Ask(Prompt::Choose(starters(workspace, item)?)))
+        }
+        Effect::ChooseField { item } => Ok(Outcome::Ask(Prompt::Choose(fields(
+            workspace.state(),
+            item,
+        )?))),
+        Effect::Edit { item, field } => edit(workspace, terminal, item, field),
+        Effect::Change { item, changes } => change(workspace, item, changes).map(Outcome::Did),
         Effect::Approve {
             item,
             reviewed,
@@ -129,7 +142,6 @@ pub fn carry_out(
         Effect::CommentInEditor { item, text } => {
             comment_in_editor(workspace, terminal, item, text).map(Outcome::Did)
         }
-        Effect::Edit { item } => edit_item(workspace, terminal, item).map(Outcome::Did),
         Effect::Permit { request, answer } => permit(workspace, request, answer).map(Outcome::Did),
         Effect::Resolve {
             item,
@@ -184,16 +196,8 @@ fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
 /// The states a principal moves an item to, that its type uses, less the one it is in. `active`
 /// and `review` are the runner's, and `open` waits until no work session holds the item.
 fn states(state: &State, item: ItemId) -> anyhow::Result<Choice> {
-    let policy = &state.policy().expect("a workforce has a policy").policy;
-    let ItemEntry::Live(live) = state
-        .item(item)
-        .ok_or_else(|| anyhow!("#{} is gone", item.short()))?
-    else {
-        bail!("#{} is archived", item.short());
-    };
-    let config = policy
-        .type_config(live.item_type())
-        .ok_or_else(|| anyhow!("no item type `{}` in the policy", live.item_type()))?;
+    let live = live(state, item)?;
+    let config = type_config(state, live)?;
     let current = live.state();
     let held = state.holder(item, &SessionRole::Work).is_some();
     let states: Vec<ItemState> = [
@@ -214,6 +218,303 @@ fn states(state: &State, item: ItemId) -> anyhow::Result<Choice> {
         states,
         index: 0,
     })
+}
+
+/// The item `item`, while it is live.
+fn live(state: &State, item: ItemId) -> anyhow::Result<&Item> {
+    match state
+        .item(item)
+        .ok_or_else(|| anyhow!("#{} is gone", item.short()))?
+    {
+        ItemEntry::Live(live) => Ok(live),
+        ItemEntry::Archived(_) => bail!("#{} is archived", item.short()),
+    }
+}
+
+fn policy(state: &State) -> &Policy {
+    &state.policy().expect("a workforce has a policy").policy
+}
+
+fn type_config<'a>(state: &'a State, live: &Item) -> anyhow::Result<&'a TypeConfig> {
+    policy(state)
+        .type_config(live.item_type())
+        .ok_or_else(|| anyhow!("no item type `{}` in the policy", live.item_type()))
+}
+
+/// Refuses a field the type of `live` does not have.
+fn ensure_allowed(state: &State, live: &Item, field: PolicyField) -> anyhow::Result<()> {
+    if !type_config(state, live)?.allows_field(field) {
+        bail!("a {} has no {}", live.item_type(), policy_field_name(field));
+    }
+    Ok(())
+}
+
+fn policy_field_name(field: PolicyField) -> &'static str {
+    match field {
+        PolicyField::Priority => "priority",
+        PolicyField::Labels => "labels",
+        PolicyField::Requires => "requirements",
+    }
+}
+
+/// The edit menu of `item`: each field with what it is now.
+pub(super) fn fields(state: &State, item: ItemId) -> anyhow::Result<Choice> {
+    let live = live(state, item)?;
+    let config = type_config(state, live)?;
+    let of_type = |level: Option<String>| {
+        Inherited {
+            item_type: live.item_type().clone(),
+            level,
+        }
+        .describe()
+    };
+    let listed = |values: Vec<String>| {
+        if values.is_empty() {
+            "—".to_owned()
+        } else {
+            values.join(", ")
+        }
+    };
+    let unless_allowed = |field: PolicyField, value: String| {
+        if config.allows_field(field) {
+            value
+        } else {
+            format!("a {} has none", live.item_type())
+        }
+    };
+    let value = |field: Field| match field {
+        Field::Text => "in $EDITOR".to_owned(),
+        Field::State => live.state().to_string(),
+        Field::Priority => unless_allowed(
+            PolicyField::Priority,
+            live.priority()
+                .map_or_else(|| "—".to_owned(), |priority| priority.to_string()),
+        ),
+        Field::Lane => live.lane().map_or_else(
+            || of_type(Some(config.lane.to_string())),
+            ToString::to_string,
+        ),
+        Field::Review => live.review_level().map_or_else(
+            || of_type(config.review.as_ref().map(ToString::to_string)),
+            ToString::to_string,
+        ),
+        Field::Recovery => live.recovery_level().map_or_else(
+            || of_type(config.recovery.as_ref().map(ToString::to_string)),
+            ToString::to_string,
+        ),
+        Field::Labels => unless_allowed(
+            PolicyField::Labels,
+            listed(live.labels().values().map(ToString::to_string).collect()),
+        ),
+        Field::Requires => unless_allowed(
+            PolicyField::Requires,
+            listed(live.requires().values().map(ToString::to_string).collect()),
+        ),
+    };
+    Ok(Choice::Field {
+        item,
+        fields: Field::ALL
+            .into_iter()
+            .map(|field| (field, value(field)))
+            .collect(),
+        index: 0,
+    })
+}
+
+/// Asks for the new value of `field` of `item`, or for the title and body, edits them in
+/// `$EDITOR`.
+fn edit(
+    workspace: &mut Workspace,
+    terminal: &mut DefaultTerminal,
+    item: ItemId,
+    field: Field,
+) -> anyhow::Result<Outcome> {
+    match asked(workspace.state(), item, field)? {
+        Some(prompt) => Ok(Outcome::Ask(prompt)),
+        None => edit_item(workspace, terminal, item).map(Outcome::Did),
+    }
+}
+
+/// What asks for the new value of `field` of `item`: a choice, or the set input. `None` for the
+/// title and body, which are written in `$EDITOR`.
+pub(super) fn asked(state: &State, item: ItemId, field: Field) -> anyhow::Result<Option<Prompt>> {
+    Ok(Some(match field {
+        Field::Text => return Ok(None),
+        Field::State => Prompt::Choose(states(state, item)?),
+        Field::Priority => Prompt::Choose(priorities(state, item)?),
+        Field::Lane => Prompt::Choose(lanes(state, item)?),
+        Field::Review => Prompt::Choose(review_levels(state, item)?),
+        Field::Recovery => Prompt::Choose(recovery_levels(state, item)?),
+        Field::Labels => Prompt::Set(labels(state, item)?),
+        Field::Requires => Prompt::Set(requirements(state, item)?),
+    }))
+}
+
+/// The priorities, and none, starting on the item's.
+fn priorities(state: &State, item: ItemId) -> anyhow::Result<Choice> {
+    let live = live(state, item)?;
+    ensure_allowed(state, live, PolicyField::Priority)?;
+    let priorities = vec![
+        Some(Priority::P0),
+        Some(Priority::P1),
+        Some(Priority::P2),
+        Some(Priority::P3),
+        None,
+    ];
+    let index = position(&priorities, &live.priority());
+    Ok(Choice::Priority {
+        item,
+        priorities,
+        index,
+    })
+}
+
+/// The lanes of the policy, starting on the item's.
+fn lanes(state: &State, item: ItemId) -> anyhow::Result<Choice> {
+    let live = live(state, item)?;
+    let policy = policy(state);
+    let lanes: Vec<LaneName> = policy.lanes.keys().cloned().collect();
+    let index = live
+        .effective_lane(policy)
+        .map_or(0, |lane| position(&lanes, lane));
+    Ok(Choice::Lane { item, lanes, index })
+}
+
+/// The type's review level, then those of the policy, starting on the item's.
+fn review_levels(state: &State, item: ItemId) -> anyhow::Result<Choice> {
+    let live = live(state, item)?;
+    let config = type_config(state, live)?;
+    let levels: Vec<Option<ReviewLevelName>> = std::iter::once(None)
+        .chain(
+            policy(state)
+                .review
+                .iter()
+                .map(|level| Some(level.name.clone())),
+        )
+        .collect();
+    Ok(Choice::Review {
+        item,
+        index: position(&levels, &live.review_level().cloned()),
+        levels,
+        of_type: Inherited {
+            item_type: live.item_type().clone(),
+            level: config.review.clone(),
+        },
+    })
+}
+
+/// The type's recovery level, then those of the policy, starting on the item's.
+fn recovery_levels(state: &State, item: ItemId) -> anyhow::Result<Choice> {
+    let live = live(state, item)?;
+    let config = type_config(state, live)?;
+    let levels: Vec<Option<RecoveryLevelName>> = std::iter::once(None)
+        .chain(
+            policy(state)
+                .recovery
+                .iter()
+                .map(|level| Some(level.name.clone())),
+        )
+        .collect();
+    Ok(Choice::Recovery {
+        item,
+        index: position(&levels, &live.recovery_level().cloned()),
+        levels,
+        of_type: Inherited {
+            item_type: live.item_type().clone(),
+            level: config.recovery.clone(),
+        },
+    })
+}
+
+/// Where `value` is among `options`; the first when it is not.
+fn position<T: PartialEq>(options: &[T], value: &T) -> usize {
+    options
+        .iter()
+        .position(|option| option == value)
+        .unwrap_or_default()
+}
+
+/// The labels of the live items, those of `item` marked.
+fn labels(state: &State, item: ItemId) -> anyhow::Result<SetInput> {
+    let live = live(state, item)?;
+    ensure_allowed(state, live, PolicyField::Labels)?;
+    let known: BTreeSet<&Label> = state
+        .live_items()
+        .flat_map(|item| item.labels().values())
+        .collect();
+    let members = known
+        .into_iter()
+        .map(|label| {
+            member(
+                label.to_string(),
+                live.labels()
+                    .contains(label)
+                    .then(|| live.labels().observed(label)),
+            )
+        })
+        .collect();
+    Ok(set_input(item, Set::Labels, members))
+}
+
+/// The capabilities of the agents and the requirements of the live items, those of `item`
+/// marked; with what the agents of its lane offer, on the devices of their principal.
+fn requirements(state: &State, item: ItemId) -> anyhow::Result<SetInput> {
+    let live = live(state, item)?;
+    ensure_allowed(state, live, PolicyField::Requires)?;
+    let lane = live.effective_lane(policy(state));
+    let offered: BTreeSet<Requirement> = state
+        .agents()
+        .filter(|(_, agent)| lane.is_some_and(|lane| agent.lanes.contains(lane)))
+        .flat_map(|(id, agent)| {
+            let hardware = state
+                .devices()
+                .filter(|device| device.principal == id.principal)
+                .filter_map(|device| device.profile)
+                .flat_map(|profile| profile.hardware_requirements());
+            agent.capabilities.iter().cloned().chain(hardware)
+        })
+        .collect();
+    let known: BTreeSet<&Requirement> = state
+        .agents()
+        .flat_map(|(_, agent)| agent.capabilities.iter())
+        .chain(state.live_items().flat_map(|item| item.requires().values()))
+        .collect();
+    let members = known
+        .into_iter()
+        .map(|requirement| {
+            member(
+                requirement.to_string(),
+                live.requires()
+                    .contains(requirement)
+                    .then(|| live.requires().observed(requirement)),
+            )
+        })
+        .collect();
+    Ok(set_input(item, Set::Requires { offered }, members))
+}
+
+fn member(value: String, held: Option<Vec<EventId>>) -> Member {
+    Member {
+        value,
+        marked: held.is_some(),
+        held,
+    }
+}
+
+fn set_input(item: ItemId, set: Set, members: Vec<Member>) -> SetInput {
+    SetInput {
+        item,
+        set,
+        members,
+        filter: Input::default(),
+        index: 0,
+    }
+}
+
+/// Writes `changes` to `item` as one edit.
+fn change(workspace: &mut Workspace, item: ItemId, changes: Vec<Change>) -> anyhow::Result<String> {
+    workspace.author(EventBody::ItemEdited(ItemEdited { item, changes }))?;
+    Ok(format!("edited #{}", item.short()))
 }
 
 /// Starts a session of `agent` on `item`.
@@ -683,9 +984,11 @@ mod tests {
         let item = apply(&mut state, create("task", "Work")).id().into();
         let session = apply(&mut state, start_session("coder", item)).id().into();
         apply(&mut state, moved(item, ItemState::Active));
-        let offered = |state: &State| match states(state, item).unwrap() {
-            Choice::State { states, .. } => states,
-            other => panic!("not a choice of states: {other:?}"),
+        let offered = |state: &State| {
+            let Choice::State { states, .. } = states(state, item).unwrap() else {
+                panic!("not a choice of states");
+            };
+            states
         };
         assert_eq!(
             offered(&state),
