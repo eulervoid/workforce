@@ -146,6 +146,7 @@ fn event_loop(
     }
     feed.read_transcripts(workspace, &mut app);
     feed.read_diff(workspace, &mut app);
+    feed.read_work_at(workspace, &mut app);
     if let Some(snapshot) = feed.snapshot(workspace, &mut app)? {
         app.refresh(snapshot);
     }
@@ -193,6 +194,7 @@ fn event_loop(
                 draw = true;
                 feed.read_transcripts(workspace, &mut app);
                 feed.read_diff(workspace, &mut app);
+                feed.read_work_at(workspace, &mut app);
                 match feed.in_view(workspace, &app) {
                     Ok(in_view) => app.refresh_detail(in_view),
                     Err(error) => app.refresh_failed(&error),
@@ -203,6 +205,7 @@ fn event_loop(
         draw = true;
         feed.read_transcripts(workspace, &mut app);
         feed.read_diff(workspace, &mut app);
+        feed.read_work_at(workspace, &mut app);
         match feed.snapshot(workspace, &mut app)? {
             Some(snapshot) => app.refresh(snapshot),
             None => app.tick(wf_store::now_ms()),
@@ -429,7 +432,7 @@ impl KeptEvents {
         detail: Option<&Detail>,
     ) -> anyhow::Result<&[Event]> {
         match detail {
-            Some(Detail::Item(item) | Detail::Diff(item)) => {
+            Some(Detail::Item(item) | Detail::Diff(item) | Detail::WorkAt { item, .. }) => {
                 self.read(workspace, &[*item])?;
                 Ok(self.of(*item))
             }
@@ -628,6 +631,33 @@ impl Feed {
                 Err(error) => app.transcript_failed(&error),
             }
         }
+    }
+
+    /// Hands the app the work at the comment on screen, asked of the device of its session once
+    /// when it is opened, or why it cannot be read.
+    fn read_work_at(&mut self, workspace: &Workspace, app: &mut App) {
+        let Some(Detail::WorkAt { item, comment }) = app.wanted().detail else {
+            return;
+        };
+        let Some(pane) = app.work_at.get_mut(&(item, comment)) else {
+            return;
+        };
+        if pane.work().is_some() {
+            return;
+        }
+        let read = match commands::comment_work(workspace, item, comment) {
+            Ok(Some(work)) => Ok(ItemWork {
+                commit: work.head,
+                changes: Changes::Files(wf_vcs::diff::parse(&work.committed)),
+                uncommitted: work.uncommitted.as_ref().map(UncommittedFiles::read),
+            }),
+            Ok(None) => Err(format!(
+                "comment {} shows no work",
+                wf_core::id::HashId::short(&comment)
+            )),
+            Err(error) => Err(format!("{error:#}")),
+        };
+        pane.read(read);
     }
 
     /// Hands the app the work of the item whose diff is on screen, when its branch moved since

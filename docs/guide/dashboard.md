@@ -72,6 +72,13 @@ committed part, the diff shows the uncommitted one: the latest snapshot against 
 committed part takes comments on lines: the uncommitted lines are not in any commit to anchor to,
 and `c` and `r` do nothing on them. `p` shows the committed part through git.
 
+The work at a comment shows the files as they were when it was written: `w` on an item picks one of
+its comments that show work, the newest first, and in the item's detail the id of such a comment is a
+link to it. A comment by the agent's work session shows its files then; an answer to a blocker shows
+them as the session parked on it, which is what the one answering saw. It is read from the machine
+the session ran on, and only read: the lines take no comments. When that machine cannot be reached
+or has no snapshot of it, the pane says so.
+
 ### When the daemon restarts
 
 After `wf daemon restart` the dashboard stays open. While the daemon is down the status line says it

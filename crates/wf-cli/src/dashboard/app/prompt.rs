@@ -116,6 +116,22 @@ pub enum Choice {
         of_type: Inherited<RecoveryLevelName>,
         index: usize,
     },
+    /// The comment of an item whose work to look at, of those that show work, the newest first,
+    /// each with what it reads as in the list.
+    WorkAt {
+        item: ItemId,
+        comments: Vec<(CommentId, String)>,
+        index: usize,
+    },
+}
+
+/// What picking an option does.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Picked {
+    /// Asks it of the workforce.
+    Effect(Effect),
+    /// Opens a detail.
+    Open(Detail),
 }
 
 /// What an item without a value of its own has of its type: `level` of the type `item_type`.
@@ -145,6 +161,7 @@ impl Choice {
             Choice::Lane { lanes, .. } => lanes.len(),
             Choice::Review { levels, .. } => levels.len(),
             Choice::Recovery { levels, .. } => levels.len(),
+            Choice::WorkAt { comments, .. } => comments.len(),
         }
     }
 
@@ -156,7 +173,8 @@ impl Choice {
             | Choice::Priority { index, .. }
             | Choice::Lane { index, .. }
             | Choice::Review { index, .. }
-            | Choice::Recovery { index, .. } => *index,
+            | Choice::Recovery { index, .. }
+            | Choice::WorkAt { index, .. } => *index,
         }
     }
 
@@ -168,7 +186,8 @@ impl Choice {
             | Choice::Priority { index, .. }
             | Choice::Lane { index, .. }
             | Choice::Review { index, .. }
-            | Choice::Recovery { index, .. } => index,
+            | Choice::Recovery { index, .. }
+            | Choice::WorkAt { index, .. } => index,
         }
     }
 
@@ -181,12 +200,34 @@ impl Choice {
             | Choice::Priority { .. }
             | Choice::Lane { .. }
             | Choice::Review { .. }
-            | Choice::Recovery { .. } => false,
+            | Choice::Recovery { .. }
+            | Choice::WorkAt { .. } => false,
         }
     }
 
-    /// What picking the selected option asks of the workforce.
-    pub(super) fn picked(self) -> Option<Effect> {
+    /// What picking the selected option does.
+    pub(super) fn picked(self) -> Option<Picked> {
+        match self {
+            Choice::WorkAt {
+                item,
+                comments,
+                index,
+            } => Some(Picked::Open(Detail::WorkAt {
+                item,
+                comment: comments.get(index)?.0,
+            })),
+            Choice::Start { .. }
+            | Choice::State { .. }
+            | Choice::Field { .. }
+            | Choice::Priority { .. }
+            | Choice::Lane { .. }
+            | Choice::Review { .. }
+            | Choice::Recovery { .. } => self.asked().map(Picked::Effect),
+        }
+    }
+
+    /// What picking the selected option asks of the workforce, for a choice that changes it.
+    fn asked(self) -> Option<Effect> {
         let change = |item, change| Effect::Change {
             item,
             changes: vec![change],
@@ -246,6 +287,7 @@ impl Choice {
                 item,
                 Change::RecoveryLevel(levels.into_iter().nth(index)?),
             )),
+            Choice::WorkAt { .. } => None,
         }
     }
 }
@@ -528,6 +570,18 @@ impl App {
         true
     }
 
+    /// Picks the selected option of `choice`: opens what it opens here, or returns what it asks
+    /// of the workforce.
+    pub(super) fn pick(&mut self, choice: Choice) -> Option<Effect> {
+        match choice.picked()? {
+            Picked::Effect(effect) => Some(effect),
+            Picked::Open(detail) => {
+                self.open(detail);
+                None
+            }
+        }
+    }
+
     /// A key while the footer asks for something: the prompt it leaves open, and what it asks of
     /// the workforce.
     #[expect(
@@ -699,13 +753,13 @@ impl App {
                 match key.code {
                     KeyCode::Down | KeyCode::Char('j') => *index = (*index + 1).min(last),
                     KeyCode::Up | KeyCode::Char('k') => *index = index.saturating_sub(1),
-                    KeyCode::Enter => return (None, choice.picked()),
+                    KeyCode::Enter => return (None, self.pick(choice)),
                     KeyCode::Esc => return (None, None),
                     KeyCode::Char(digit @ '1'..='9') if numbered => {
                         let picked = usize::from(digit as u8 - b'1');
                         if picked <= last {
                             *index = picked;
-                            return (None, choice.picked());
+                            return (None, self.pick(choice));
                         }
                     }
                     _ => {}

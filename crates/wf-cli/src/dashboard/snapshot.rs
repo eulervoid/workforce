@@ -12,6 +12,7 @@ use wf_core::item::{ItemEntry, ItemState};
 use wf_core::name::AgentName;
 use wf_core::resolve::MentionTarget;
 use wf_core::search::{Query, SearchScope, search};
+use wf_core::session::CommentSnapshot;
 use wf_core::session::{CommitId, Session};
 use wf_core::state::State;
 use wf_core::stats::{AgentStats, ProjectStats};
@@ -63,6 +64,8 @@ pub struct Links {
     pub items: HashMap<String, ItemId>,
     /// The comments of every live item, by the item and the comment's short id: `k3f9`.
     pub comments: HashSet<(ItemId, String)>,
+    /// The comments that show the work at a snapshot ([`State::comment_snapshot`]), the same way.
+    pub with_work: HashMap<(ItemId, String), CommentId>,
     /// Every agent, by its label: `@ada/grace`.
     pub agents: HashMap<String, AgentId>,
     /// Every session, by its label: `@ada/grace/s4k2ab`.
@@ -82,6 +85,15 @@ impl Links {
                     item.comments()
                         .keys()
                         .map(|comment| (item.id(), comment.short()))
+                })
+                .collect(),
+            with_work: state
+                .live_items()
+                .flat_map(|item| {
+                    item.comments()
+                        .keys()
+                        .filter(|comment| state.comment_snapshot(item.id(), **comment).is_some())
+                        .map(|comment| ((item.id(), comment.short()), *comment))
                 })
                 .collect(),
             agents: state
@@ -253,6 +265,12 @@ pub enum InView {
         id: ItemId,
         comments: Vec<PostedComment>,
     },
+    /// What the work at a comment is: the comment, who wrote it, and which snapshot it shows.
+    WorkAt {
+        item: ItemId,
+        comment: CommentId,
+        title: String,
+    },
     /// A flag that is not about an item, in the notice box of an item.
     Flag { flag: Flag, text: String },
 }
@@ -264,12 +282,20 @@ impl InView {
             (Self::Item { id, .. }, Detail::Item(wanted)) => id == wanted,
             (Self::Session { info, .. }, Detail::Session(wanted)) => info.view.id == *wanted,
             (Self::Diff { id, .. }, Detail::Diff(wanted)) => id == wanted,
+            (
+                Self::WorkAt { item, comment, .. },
+                Detail::WorkAt {
+                    item: wanted,
+                    comment: wanted_comment,
+                },
+            ) => item == wanted && comment == wanted_comment,
             (Self::Agent { id, .. }, Detail::Agent(wanted)) => id == wanted,
             (Self::Flag { flag, .. }, Detail::Flag(wanted)) => flag == wanted,
             (
                 Self::Item { .. }
                 | Self::Session { .. }
                 | Self::Diff { .. }
+                | Self::WorkAt { .. }
                 | Self::Agent { .. }
                 | Self::Flag { .. },
                 _,
@@ -313,6 +339,12 @@ pub enum Detail {
     /// The work of an item against its target, read from git by the loop rather than taken
     /// with the snapshot.
     Diff(ItemId),
+    /// The work of an item at the snapshot a comment shows (SPEC §10), asked of the device of its
+    /// session by the loop.
+    WorkAt {
+        item: ItemId,
+        comment: CommentId,
+    },
     Agent(AgentId),
     /// A flag of `wf status` that is not about an item.
     Flag(Flag),
@@ -631,6 +663,23 @@ impl InView {
                     .collect();
                 Some(InView::Diff { id, comments })
             }
+            Detail::WorkAt { item, comment } => {
+                let ItemEntry::Live(live) = state.item(item)? else {
+                    return None;
+                };
+                let by = who(state, &live.comments().get(&comment)?.by);
+                let shown = match state.comment_snapshot(item, comment)? {
+                    CommentSnapshot::Taken { .. } => "as it was then".to_owned(),
+                    CommentSnapshot::Parked { blocker, .. } => {
+                        format!("as its session parked on blocker {}", blocker.short())
+                    }
+                };
+                Some(InView::WorkAt {
+                    item,
+                    comment,
+                    title: format!("work at comment {} by {by}, {shown}", comment.short()),
+                })
+            }
             // Gone once fixed.
             Detail::Flag(flag) => flagged.contains(&flag).then(|| InView::Flag {
                 text: render::flag_detail_for(&flag, Some(usize::from(width).min(100))),
@@ -787,7 +836,11 @@ impl Detail {
     /// Where a detail starts: a transcript at its end, which is what happens now.
     pub(super) fn start(&self) -> Scroll {
         match self {
-            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) | Detail::Diff(_) => Scroll::At(0),
+            Detail::Item(_)
+            | Detail::Agent(_)
+            | Detail::Flag(_)
+            | Detail::Diff(_)
+            | Detail::WorkAt { .. } => Scroll::At(0),
             Detail::Session(_) => Scroll::END,
         }
     }

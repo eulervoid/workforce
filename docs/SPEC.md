@@ -1208,7 +1208,10 @@ was when it was written.
   shows the work at its snapshot against the target, committed and uncommitted apart (against its
   `head`). A comment resolving a blocker that parked a session shows the snapshot the session parked
   on, which is the work as the one who resolved it saw it, as a parked session changes nothing. The
-  live diff's uncommitted part is the latest snapshot against the head.
+  live diff's uncommitted part is the latest snapshot against the head. In the dashboard, `w` on an
+  item opens a chooser of its comments that show work, the newest first, and in the item's detail the
+  id of such a comment is a link; either opens the work at it, read-only. `wf item diff --at
+  <comment>` prints the same.
 * The snapshot repository is kept as long as the transcripts of the item's sessions; the daemon
   never packs or prunes it.
 

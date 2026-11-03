@@ -298,6 +298,7 @@ pub(super) fn with_links() -> Snapshot {
     snapshot.links = Links {
         items: [parse, spans].map(|id| (id.short(), id)).into(),
         comments: [(spans, CommentId::from_bytes([21; 32]).short())].into(),
+        with_work: Default::default(),
         agents: [("@ada/coder".to_owned(), coder_agent())].into(),
         sessions: [(format!("@ada/coder/{}", coder.short()), coder)].into(),
     };

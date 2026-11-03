@@ -165,7 +165,7 @@ impl App {
         match self.prompt.take() {
             Some(Prompt::Choose(mut choice)) if line < choice.len() => {
                 *choice.index_mut() = line;
-                choice.picked()
+                self.pick(choice)
             }
             Some(Prompt::Set(mut input)) => {
                 self.pick_found(&mut input, line);

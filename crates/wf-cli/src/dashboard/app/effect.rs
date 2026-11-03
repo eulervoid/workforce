@@ -72,6 +72,10 @@ pub enum Effect {
     ChooseField {
         item: ItemId,
     },
+    /// Asks which comment of an item to look at the work at, of those that show work.
+    ChooseWorkAt {
+        item: ItemId,
+    },
     /// Edits a field of an item: the title and body in `$EDITOR`, as `wf item edit` does; any
     /// other by asking for its new value.
     Edit {
