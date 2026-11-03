@@ -105,6 +105,31 @@ impl fmt::Display for CommitId {
     }
 }
 
+/// The snapshot of a work session's work that a comment shows (SPEC §10), which the transcript
+/// of the session, on its device, names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CommentSnapshot {
+    /// The one the session took at `comment`, its own comment on its item.
+    Taken {
+        session: SessionId,
+        comment: crate::id::CommentId,
+    },
+    /// The last one the session took before it was prompted again after `blocker`, its blocker on
+    /// its item: what it parked on, for the comment that resolves the blocker.
+    Parked {
+        session: SessionId,
+        blocker: crate::id::CommentId,
+    },
+}
+
+impl CommentSnapshot {
+    pub fn session(&self) -> SessionId {
+        match self {
+            Self::Taken { session, .. } | Self::Parked { session, .. } => *session,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SessionRole {
     Work,

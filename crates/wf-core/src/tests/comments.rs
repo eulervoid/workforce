@@ -369,3 +369,65 @@ fn a_comment_resolving_what_its_author_has_not_seen_is_refused() {
     );
     assert!(open(&state, task).is_empty());
 }
+
+#[test]
+fn a_comment_shows_the_snapshot_of_its_work_session_or_of_the_blocker_it_resolves() {
+    use crate::session::{CommentSnapshot, SessionRole};
+
+    let (fixture, mut state, task) = with_task();
+    fixture.apply(&mut state, 0, 2_001, define_agent("coder"));
+    let session: SessionId = fixture
+        .apply(&mut state, 0, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    let actor = fixture.agent_actor("coder", session);
+    let report = fixture.author_as(&state, 0, actor.clone(), 3_001, comment(task, "step one"));
+    state.receive(report.clone(), Trust::Untrusted).unwrap();
+    let asked = fixture.author_as(&state, 0, actor, 3_002, blocker(task, "which crate?"));
+    state.receive(asked.clone(), Trust::Untrusted).unwrap();
+    let plain = comment_id(&fixture.apply(&mut state, 0, 3_003, comment(task, "a remark")));
+    let answer = comment_id(&fixture.apply(
+        &mut state,
+        0,
+        3_004,
+        resolving(task, "humantime", &[comment_id(&asked)]),
+    ));
+
+    assert_eq!(
+        state.comment_snapshot(task, comment_id(&report)),
+        Some(CommentSnapshot::Taken {
+            session,
+            comment: comment_id(&report)
+        })
+    );
+    assert_eq!(
+        state.comment_snapshot(task, answer),
+        Some(CommentSnapshot::Parked {
+            session,
+            blocker: comment_id(&asked)
+        })
+    );
+    assert_eq!(state.comment_snapshot(task, plain), None);
+
+    // A review session's comment shows no snapshot: only work sessions take them.
+    let review: SessionId = fixture
+        .apply(
+            &mut state,
+            0,
+            3_005,
+            start_session_as(
+                "coder",
+                task,
+                SessionRole::Review {
+                    commit: None,
+                    step: None,
+                },
+            ),
+        )
+        .id()
+        .into();
+    let reviewer = fixture.agent_actor("coder", review);
+    let verdict = fixture.author_as(&state, 0, reviewer, 3_006, comment(task, "looks fine"));
+    state.receive(verdict.clone(), Trust::Untrusted).unwrap();
+    assert_eq!(state.comment_snapshot(task, comment_id(&verdict)), None);
+}

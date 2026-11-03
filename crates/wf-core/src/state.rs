@@ -614,6 +614,42 @@ impl State {
         self.latest_head_session(item).and_then(Session::head)
     }
 
+    /// The snapshot of the work that `comment` on `item` shows: the one its writer took at it when
+    /// a work session on the item wrote it, else the one a work session on the item parked on with
+    /// a blocker the comment resolves (the latest such blocker). `None` for any other comment.
+    pub fn comment_snapshot(
+        &self,
+        item: ItemId,
+        comment: crate::id::CommentId,
+    ) -> Option<crate::session::CommentSnapshot> {
+        use crate::event::CommentKind;
+        use crate::session::CommentSnapshot;
+
+        let comments = self.item_including_archived(item)?.comments();
+        let works_on_item = |session: SessionId| {
+            self.session(session).is_some_and(|session| {
+                session.role() == SessionRole::Work && session.item() == item
+            })
+        };
+        if let Some(session) = comments.get(&comment)?.session()
+            && works_on_item(session)
+        {
+            return Some(CommentSnapshot::Taken { session, comment });
+        }
+        comments
+            .iter()
+            .filter(|(_, blocker)| blocker.kind == CommentKind::Blocker)
+            .filter(|(_, blocker)| {
+                blocker
+                    .resolved()
+                    .is_some_and(|resolved| resolved.by == comment)
+            })
+            .filter_map(|(id, blocker)| Some((*id, blocker, blocker.session()?)))
+            .filter(|(_, _, session)| works_on_item(*session))
+            .max_by_key(|(id, blocker, _)| (blocker.at, *id))
+            .map(|(blocker, _, session)| CommentSnapshot::Parked { session, blocker })
+    }
+
     pub fn item(&self, id: ItemId) -> Option<ItemEntry<'_>> {
         self.workforce.as_ref()?.items.get(&id).map(ItemEntry::of)
     }
