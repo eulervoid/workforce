@@ -116,6 +116,7 @@ harnesses inherit it rather than the 256 a macOS terminal gives; it logs a warni
 | `<wf>/git` | wf's own bare repository: the target and the item branches, and nothing else (section 10) |
 | `<wf>/repos/` | the repository of each item's agent and the repositories and directories of other sessions (section 10) |
 | `<wf>/transcripts/` | ACP transcripts and resume records of sessions (local, never synced) |
+| `<wf>/snapshots/` | the snapshots of each item's work, committed or not (section 10; local, never synced) |
 | `<wf>/check/`, `check-logs/`, `checks-passed/` | the check worktree, logs, passes |
 | `<wf>/sandbox/`, `judges/`, `announced.json` | sandbox profiles, agent deciders, notified inbox entries |
 | `$XDG_CONFIG_HOME/workforce/config.toml` | the machine config (section 13) |
@@ -1173,6 +1174,40 @@ is, so that the log says every commit another device needs.
 With the submission (the `head` of a submitted end) these are every commit another device needs.
 Item heads get no event of their own and stay out of gossip.
 
+### Snapshots of the work
+
+Agents commit irregularly and a turn can last hours, so the commits say little about what a session
+changed when. A **snapshot** is the tree of the agent repository's files at one moment, committed or
+not, so that the transcript can show the changes where they were made and a comment the work as it
+was when it was written.
+
+* **Taken** by the daemon of the session's device for a work session, at three points:
+  * a **block**: the agent writes text again after one or more tool calls (the first message chunk
+    after them), so each snapshot holds what one run of tool calls changed, shell commands
+    included; and after every 50 tool calls without text in between;
+  * a **comment** by the session on its item, after the import that sets its `head`;
+  * the **end of a turn**, which is also where a session parks on a blocker.
+* **How:** in the item's snapshot repository, `<wf>/snapshots/<item>`, a bare repository of the
+  daemon's own whose alternates point at `<wf>/git/objects`, git runs with
+  `--work-tree=<agent repository>` and an index of the session's own
+  (`<wf>/snapshots/<item>/<session>.index`, kept between snapshots so only changed files are
+  read): `add -A`, then `write-tree`. No git process reads the agent repository's `.git`, so its
+  config, hooks and filters play no part; `.gitignore` and `.gitattributes` among the files apply
+  as in a commit. A file over 8 MiB is left out and the snapshot names it as left out.
+* **Recorded** in the session's transcript as an entry written by wf
+  (`{"snapshot": <tree>, "at": "block" | "comment" | "turn_end", "comment": <id>?}`), and only when
+  the tree differs from the session's previous snapshot. Snapshots never enter the log: no other
+  device has their objects, and the log names only what every device can fetch. Other devices ask
+  for their diffs over `wf/query/1` (section 14).
+* **Shown:** the transcript shows under each block the diff of its snapshot against the one before
+  (the session's first against the branch's head when it started); a comment by a work session
+  shows the work at its snapshot against the target, committed and uncommitted apart (against its
+  `head`). A comment resolving a blocker that parked a session shows the snapshot the session parked
+  on, which is the work as the one who resolved it saw it, as a parked session changes nothing. The
+  live diff's uncommitted part is the latest snapshot against the head.
+* The snapshot repository is kept as long as the transcripts of the item's sessions; the daemon
+  never packs or prunes it.
+
 ### Repositories across devices
 
 Every commit the log names reaches every device, peer to peer: no server, no credentials between
@@ -1672,7 +1707,11 @@ mDNS for LAN-only use.
   frame), `Work` (the target, the head commit and its diff against the target as git prints it), `NotHere` (no
   branch or agent repository of the item on this device) or `TooLarge` (the work does not fit the answer,
   told apart from a broken connection). A request is at most 1 KiB, an answer at most
-  32 MiB, and a peer silent for 30 s ends the exchange. The diff is of the committed work only: the daemon does not run git in an agent's repository to read what is uncommitted there. A live view
+  32 MiB, and a peer silent for 30 s ends the exchange. `Work` also carries the diff of the
+  session's latest snapshot against the head, the uncommitted part. `Query::Snapshot { workforce,
+  item, from, to }` is answered with the diff between two snapshots of the item, or between the head
+  or target and one (`from`), as a `DiffAnswer`. The daemon reads what is uncommitted only through
+  snapshots (section 10), never by running git with the agent repository's `.git`. A live view
   is asked of one device and never stored or synced; iroh-docs would replicate every snapshot to
   every replica whether anyone looks. `Query::Transcript { workforce, session, from }` is answered
   with a `TranscriptAnswer`: `Part` (the bytes after byte `from`, at most 1 MiB; more may follow),
