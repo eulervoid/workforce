@@ -742,6 +742,11 @@ impl App {
         {
             panes.list_top = panes.list_top.at(list_top);
         }
+        if let Some(keys) = drawn.keys
+            && let Some(Prompt::Keys { scroll }) = &mut self.prompt
+        {
+            *scroll = keys;
+        }
         for pane in self.diffs.values_mut() {
             pane.area = None;
         }

@@ -16,6 +16,11 @@ impl App {
     /// the detail beside it, and leaves the selection and the keys where they are; with one pane
     /// on screen, that one.
     pub fn wheel(&mut self, column: u16, wheel: Wheel) {
+        // The keys are over all else, so they scroll wherever the pointer is.
+        if let Some(Prompt::Keys { scroll }) = &mut self.prompt {
+            *scroll = wheel.scroll(*scroll);
+            return;
+        }
         if !self.mouse_passes() {
             return;
         }
@@ -398,7 +403,7 @@ impl App {
                 | Prompt::Choose(_)
                 | Prompt::Set(_)
                 | Prompt::Stop { .. }
-                | Prompt::Keys,
+                | Prompt::Keys { .. },
             ) => false,
         }
     }

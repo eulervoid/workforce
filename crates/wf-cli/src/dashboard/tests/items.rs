@@ -2,7 +2,7 @@
 
 use super::support::*;
 use crate::dashboard::app::{
-    App, Choice, Effect, Field, NowRow, Opened, Prompt, Scroll, Split, Starter,
+    App, Choice, Effect, Field, NowRow, Opened, Prompt, Scroll, Split, Starter, Tab, Wheel,
 };
 use crate::dashboard::snapshot::Detail;
 use crate::theme;
@@ -343,19 +343,63 @@ fn a_session_is_stopped_only_when_confirmed() {
 fn the_keys_show_on_a_question_mark() {
     let mut app = app();
     press(&mut app, KeyCode::Char('?'));
-    assert!(matches!(app.prompt, Some(Prompt::Keys)));
+    assert!(matches!(app.prompt, Some(Prompt::Keys { .. })));
+    // A narrow window has them in one column, from the top.
     insta::assert_snapshot!("keys", screen(&mut app, 60, 18));
-    // Any key closes it, and does nothing else.
-    assert_eq!(press(&mut app, KeyCode::Char('q')), None);
+    // Any key that does not scroll closes it, and does nothing else.
+    assert_eq!(press(&mut app, KeyCode::Char('2')), None);
     assert!(app.prompt.is_none());
+    assert_eq!(app.tab, Tab::Now);
+    for close in [KeyCode::Esc, KeyCode::Char('?'), KeyCode::Char('q')] {
+        press(&mut app, KeyCode::Char('?'));
+        assert_eq!(press(&mut app, close), None);
+        assert!(app.prompt.is_none());
+    }
 }
 
 #[test]
-fn the_keys_show_in_sections_general_first_and_the_others_to_its_right() {
+fn the_keys_scroll_down_to_the_last_section_and_open_at_the_top() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('?'));
+    let shows = |app: &mut App, text: &str| screen(app, 60, 18).contains(text);
+    assert!(shows(&mut app, " general "));
+    assert!(!shows(&mut app, " diff "));
+    // The keys that scroll a text scroll them, and leave them open.
+    press(&mut app, KeyCode::Char('G'));
+    assert!(matches!(app.prompt, Some(Prompt::Keys { .. })));
+    assert!(shows(&mut app, " diff "));
+    assert!(shows(&mut app, " 100% "));
+    // Up from the end, not from past it.
+    press(&mut app, KeyCode::Char('k'));
+    assert!(!shows(&mut app, " 100% "));
+    press(&mut app, KeyCode::Char('g'));
+    assert!(shows(&mut app, " general "));
+    for _ in 0..20 {
+        press(&mut app, KeyCode::PageDown);
+    }
+    assert!(shows(&mut app, " diff "));
+    // So does the wheel, wherever it is.
+    for _ in 0..40 {
+        app.wheel(10, Wheel::Up);
+    }
+    assert!(shows(&mut app, " general "));
+    for _ in 0..40 {
+        app.wheel(10, Wheel::Down);
+    }
+    assert!(shows(&mut app, " diff "));
+    // Opened again, they are at the top.
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('?'));
+    assert!(shows(&mut app, " general "));
+    assert!(!shows(&mut app, " diff "));
+}
+
+#[test]
+fn the_keys_show_in_sections_in_order_general_at_the_top_left() {
     /// The titles of the sections, by the column and the row they are in.
-    fn sections(app: &mut App) -> Vec<String> {
+    fn sections(app: &mut App, width: u16) -> Vec<String> {
         press(app, KeyCode::Char('?'));
-        let drawn = Drawn::of(app, 180, 30);
+        let drawn = Drawn::of(app, width, 80);
         press(app, KeyCode::Esc);
         let titles = [
             "general",
@@ -392,16 +436,20 @@ fn the_keys_show_in_sections_general_first_and_the_others_to_its_right() {
         "transcript",
         "diff",
     ];
-    // The same wherever the keys are.
-    let mut app = app();
-    assert_eq!(sections(&mut app), expected);
-    press(&mut app, KeyCode::Char('2'));
-    app.refresh(with_items());
-    press(&mut app, KeyCode::Enter);
-    assert_eq!(sections(&mut app), expected);
-    assert_eq!(sections(&mut diff_app()), expected);
-    // In a wide window, every section shows, in columns.
+    // The same wherever the keys are, in one column and in two.
+    for width in [60, 180] {
+        let mut app = app();
+        assert_eq!(sections(&mut app, width), expected);
+        press(&mut app, KeyCode::Char('2'));
+        app.refresh(with_items());
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(sections(&mut app, width), expected);
+        assert_eq!(sections(&mut diff_app(), width), expected);
+    }
+    // A wide window has them in two columns about as tall, and scrolls them together.
     let mut app = self::app();
     press(&mut app, KeyCode::Char('?'));
-    insta::assert_snapshot!("keys_in_columns", screen(&mut app, 180, 30));
+    insta::assert_snapshot!("keys_in_columns", screen(&mut app, 120, 30));
+    press(&mut app, KeyCode::Char('G'));
+    insta::assert_snapshot!("keys_in_columns_end", screen(&mut app, 120, 30));
 }

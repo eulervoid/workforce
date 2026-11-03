@@ -9,8 +9,10 @@ use tui_input::Input;
 use wf_core::id::{HashId, ItemId};
 
 use super::chrome::SEPARATOR;
-use super::{KeysAt, Themed, accent, clear, highlight, themed};
-use crate::dashboard::app::{App, Choice, Found, Inherited, Prompt, SetInput, Starter, Written};
+use super::{KeysAt, Themed, accent, clear, draw_position, highlight, themed};
+use crate::dashboard::app::{
+    App, Choice, Found, Inherited, Prompt, Scroll, SetInput, Starter, Written,
+};
 use crate::dashboard::hint::HELP;
 use crate::render;
 use crate::theme;
@@ -196,75 +198,49 @@ fn draw_popup(
     inner
 }
 
-/// Draws the keys, under their title in `accent`: in sections by where they work, the general
-/// keys in the first column and the others to their right, on in the next column when they are
-/// taller than the body. The columns that do not fit beside the first are left out; returns
-/// whether any were.
-pub(super) fn draw_keys(frame: &mut Frame, accent: Color, body: Rect, base: Style) -> bool {
-    // The rows inside the borders.
-    let height = usize::from(body.height.saturating_sub(2)).max(2);
-    let mut columns: Vec<Vec<Line>> = vec![Vec::new()];
-    for (index, section) in HELP.iter().enumerate() {
-        // The general keys have their column to themselves.
-        if index == 1 {
-            columns.push(Vec::new());
-        }
-        let mut title = section.title.to_owned();
-        let mut hints = section.hints;
-        while !hints.is_empty() {
-            let column = columns.last_mut().expect("there is a column");
-            // A blank line keeps the sections of a column apart.
-            let gap = usize::from(!column.is_empty());
-            // The title and at least one key, or the next column.
-            let room = height.saturating_sub(column.len() + gap + 1);
-            if room == 0 {
-                columns.push(Vec::new());
-                continue;
-            }
-            let mut taken = room.min(hints.len());
-            // A row that goes on with the one before stays with it.
-            while taken > 1 && taken < hints.len() && hints[taken].label.is_empty() {
-                taken -= 1;
-            }
-            if gap == 1 {
-                column.push(Line::default());
-            }
-            column.push(Line::from(themed(format!(" {title}"), theme::text_bold())));
-            column.extend(hints[..taken].iter().map(|hint| {
+/// Draws the keys at `scroll`, under their title in `accent`: in sections by where they work,
+/// in two columns when they fit side by side, the general keys at the top of the first, and in
+/// one otherwise. Returns the scroll kept to what is there.
+pub(super) fn draw_keys(
+    frame: &mut Frame,
+    accent: Color,
+    scroll: Scroll,
+    body: Rect,
+    base: Style,
+) -> Scroll {
+    let sections: Vec<Vec<Line>> = HELP
+        .iter()
+        .map(|section| {
+            let mut lines = vec![Line::from(themed(
+                format!(" {}", section.title),
+                theme::text_bold(),
+            ))];
+            lines.extend(section.hints.iter().map(|hint| {
                 Line::from(vec![
                     themed(format!(" {:<12}", hint.label), theme::key()),
                     Span::raw(hint.what),
                 ])
             }));
-            hints = &hints[taken..];
-            title = format!("{}, on", section.title);
-        }
-    }
-    // Each column as wide as its longest line, and a space before the next or the border; the
-    // first, and those after it that fit beside the borders.
+            lines
+        })
+        .collect();
+    // Two columns when, divided where they are about as tall, they fit beside the borders.
+    let (left, right) = sections.split_at(balanced_split(&sections));
+    let left = stacked(left);
+    let right = stacked(right);
     let room = body.width.saturating_sub(4);
-    let mut width = 0;
-    let mut shown = Vec::new();
-    let mut left_out = false;
-    for lines in columns {
-        let column_width = lines.iter().map(Line::width).max().unwrap_or_default() as u16 + 1;
-        if shown.is_empty() || (!left_out && width + column_width <= room) {
-            width += column_width;
-            shown.push((lines, column_width));
-        } else {
-            left_out = true;
-        }
-    }
-    let rows = shown
-        .iter()
-        .map(|(lines, _)| lines.len())
-        .max()
-        .unwrap_or_default() as u16;
+    let columns = if column_width(&left) + column_width(&right) <= room {
+        vec![left, right]
+    } else {
+        vec![stacked(&sections)]
+    };
+    let widths: Vec<u16> = columns.iter().map(|lines| column_width(lines)).collect();
+    let rows = columns.iter().map(Vec::len).max().unwrap_or_default();
     let area = Rect {
         x: body.x + 1,
         y: body.y,
-        width: (width + 2).min(body.width.saturating_sub(2)),
-        height: (rows + 2).min(body.height),
+        width: (widths.iter().sum::<u16>() + 2).min(body.width.saturating_sub(2)),
+        height: (rows as u16 + 2).min(body.height),
     };
     // The title is drawn over the border, and without this would take on its dim.
     let undimmed = Style::new().remove_modifier(Modifier::DIM);
@@ -287,17 +263,62 @@ pub(super) fn draw_keys(frame: &mut Frame, accent: Color, body: Rect, base: Styl
         .title(Line::from(title));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let height = usize::from(inner.height);
+    let last_top = rows.saturating_sub(height);
+    let scroll = scroll.within(last_top);
     let mut x = inner.x;
-    for (lines, width) in shown {
+    for (lines, width) in columns.into_iter().zip(widths) {
         let column = Rect {
             x,
             width: width.min(inner.right().saturating_sub(x)),
             ..inner
         };
-        frame.render_widget(Paragraph::new(lines), column);
+        let shown: Vec<Line> = lines.into_iter().skip(scroll.top()).take(height).collect();
+        frame.render_widget(Paragraph::new(shown), column);
         x = x.saturating_add(width);
     }
-    left_out
+    // Where the keys are scrolled to, on the bottom border.
+    let bottom = Rect {
+        x: area.x + 1,
+        y: area.bottom().saturating_sub(1),
+        width: area.width.saturating_sub(2),
+        height: 1,
+    };
+    draw_position(frame, bottom, scroll.top(), last_top, base);
+    scroll
+}
+
+/// How many of `sections` go in the first of two columns, so that the taller of the two is as
+/// short as it can be.
+fn balanced_split(sections: &[Vec<Line>]) -> usize {
+    (1..sections.len())
+        .min_by_key(|&split| {
+            let (left, right) = sections.split_at(split);
+            stacked_height(left).max(stacked_height(right))
+        })
+        .unwrap_or(sections.len())
+}
+
+/// The lines of `sections` one after the other, a blank line between two.
+fn stacked(sections: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for section in sections {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.extend(section.iter().cloned());
+    }
+    lines
+}
+
+/// How many lines `sections` take one after the other.
+fn stacked_height(sections: &[Vec<Line>]) -> usize {
+    sections.iter().map(Vec::len).sum::<usize>() + sections.len().saturating_sub(1)
+}
+
+/// A column as wide as its longest line, and a space before the next or the border.
+fn column_width(lines: &[Line]) -> u16 {
+    lines.iter().map(Line::width).max().unwrap_or_default() as u16 + 1
 }
 
 /// The line the footer asks for, with the cursor in it.
@@ -316,7 +337,7 @@ pub(super) fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: R
             | Prompt::LineComment { .. }
             | Prompt::Choose(_)
             | Prompt::Stop { .. }
-            | Prompt::Keys => KeysAt::Footer,
+            | Prompt::Keys { .. } => KeysAt::Footer,
         },
     );
     let question = |text: String| {
@@ -365,7 +386,7 @@ pub(super) fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: R
             &input.search,
             "↑/↓ move · enter mark · enter on no text apply · esc cancel ",
         ),
-        Prompt::Choose(_) | Prompt::Keys => return,
+        Prompt::Choose(_) | Prompt::Keys { .. } => return,
         Prompt::Answer { blocker, input, .. } => (
             format!("⧗ {} answer:", blocker.short()),
             input,
