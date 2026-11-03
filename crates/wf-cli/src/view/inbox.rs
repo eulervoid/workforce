@@ -103,29 +103,112 @@ pub fn lost_push_view(state: &State, push: &TargetMove) -> InboxEntryView {
     }
 }
 
+/// What the daemon knows of one thing wrong with the machine: what the principal does about it,
+/// what stands still until then, and what was said when it first happened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FaultNotice {
+    pub todo: String,
+    pub retry: Retry,
+    /// What stands still while `retry` is [`Retry::Never`].
+    pub blocked: String,
+    pub since_ms: u64,
+    pub said: Said,
+}
+
+/// What a fault came with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Said {
+    /// The error of the harness or the disk, as it was reported.
+    Error(String),
+    /// What wf found out itself.
+    Note(String),
+}
+
+impl FaultNotice {
+    /// In one line, as the inbox of the command line prints it.
+    pub fn what(&self) -> String {
+        let said = match &self.said {
+            Said::Error(text) | Said::Note(text) => text,
+        };
+        format!(
+            "{}; {}. Since {}: {said}",
+            self.todo,
+            self.next_try(&timestamp),
+            timestamp(self.since_ms)
+        )
+    }
+
+    /// In paragraphs of markdown, with times as `when` tells them and the error as code, broken
+    /// into lines of at most `width` columns.
+    pub fn paragraphs(&self, when: &dyn Fn(u64) -> String, width: usize) -> Vec<String> {
+        let mut paragraphs = vec![
+            format!("{}.", capitalized(&self.todo)),
+            format!("{}.", capitalized(&self.next_try(when))),
+        ];
+        match &self.said {
+            Said::Error(error) => {
+                let options = textwrap::Options::new(width.max(1)).break_words(true);
+                let lines = textwrap::wrap(error.trim(), options).join("\n");
+                paragraphs.push(format!(
+                    "Since {}, it failed with:\n\n~~~~\n{lines}\n~~~~",
+                    when(self.since_ms)
+                ));
+            }
+            Said::Note(note) => {
+                paragraphs.push(format!("Since {}: {}", when(self.since_ms), note.trim()))
+            }
+        }
+        paragraphs
+    }
+
+    fn next_try(&self, when: &dyn Fn(u64) -> String) -> String {
+        match self.retry {
+            Retry::Never => self.blocked.clone(),
+            Retry::At(at_ms) => format!("its agents are tried again at {}", when(at_ms)),
+        }
+    }
+}
+
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
 /// One entry for each thing wrong with the machine, however many sessions it ended: what it is
 /// and what the principal does about it.
 pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
-    let entry = |title: String, what: String| InboxEntryView {
-        kind: InboxKind::MachineFault,
-        item: None,
-        session: None,
-        title,
-        what,
-        passed: Vec::new(),
-    };
-    let mut entries: Vec<InboxEntryView> = faults
+    machine_fault_notices(faults)
+        .into_iter()
+        .map(|(title, notice)| InboxEntryView {
+            kind: InboxKind::MachineFault,
+            item: None,
+            session: None,
+            title,
+            what: notice.what(),
+            passed: Vec::new(),
+        })
+        .collect()
+}
+
+/// Each thing wrong with the machine, under its title.
+pub fn machine_fault_notices(faults: &MachineFaults) -> Vec<(String, FaultNotice)> {
+    let mut entries: Vec<(String, FaultNotice)> = faults
         .out_of_space
         .iter()
         .map(|full| {
-            entry(
+            (
                 "The disk is full".to_string(),
-                format!(
-                    "free space on this machine, such as with `cargo clean` in old agent repositories; \
-                     nothing is started until there is. Since {}, the daemon could not write {}",
-                    timestamp(full.since_ms),
-                    full.what
-                ),
+                FaultNotice {
+                    todo: "free space on this machine, such as with `cargo clean` in old agent \
+                           repositories"
+                        .to_string(),
+                    retry: Retry::Never,
+                    blocked: "nothing is started until there is".to_string(),
+                    since_ms: full.since_ms,
+                    said: Said::Error(format!("could not write {}", full.what)),
+                },
             )
         })
         .collect();
@@ -151,18 +234,21 @@ pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
                 format!("check that {harness} is installed and starts on this machine"),
             ),
         };
-        entry(
+        let said = match fault.fault {
+            HarnessFault::Unknown => Said::Note(fault.what.clone()),
+            HarnessFault::LoginLapsed | HarnessFault::UsageLimit | HarnessFault::Unreachable => {
+                Said::Error(fault.what.clone())
+            }
+        };
+        (
             title,
-            format!(
-                "{todo}; {}. Since {}: {}",
-                match fault.retry {
-                    Retry::Never => "its agents do not start until then".to_string(),
-                    Retry::At(at_ms) =>
-                        format!("its agents are tried again at {}", timestamp(at_ms)),
-                },
-                timestamp(fault.since_ms),
-                fault.what
-            ),
+            FaultNotice {
+                todo,
+                retry: fault.retry,
+                blocked: "its agents do not start until then".to_string(),
+                since_ms: fault.since_ms,
+                said,
+            },
         )
     }));
     entries

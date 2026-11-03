@@ -675,15 +675,27 @@ fn the_now_tab_lists_the_other_devices_with_when_each_was_seen_and_which_are_gon
 
 #[test]
 fn a_machine_fault_cut_short_in_its_row_is_in_full_in_the_detail_pane() {
-    let tail = "the quota resets at nine tomorrow";
     let mut snapshot = snapshot();
+    snapshot.now_ms = 10 * 3_600_000;
     snapshot.waiting = vec![InboxEntry::MachineFault {
         title: "claude-code hit its usage limit".to_owned(),
-        what: format!("wait for the reset, or raise it; its agents are tried again later: {tail}"),
+        notice: crate::view::FaultNotice {
+            todo: "wait for the usage limit of claude-code to reset, or raise it".to_owned(),
+            retry: wf_daemon::Retry::At(11 * 3_600_000),
+            blocked: "its agents do not start until then".to_owned(),
+            since_ms: 8 * 3_600_000,
+            said: crate::view::Said::Error(
+                "You've hit your limit, it resets at nine tomorrow".to_owned(),
+            ),
+        },
     }];
     let mut app = App::new(snapshot, TimeZone::UTC);
     app.resize(120, 24);
     let shown = screen(&mut app, 120, 24);
-    assert!(shown.contains("quota resets at nine"), "{shown}");
-    assert!(shown.contains("tomorrow"), "{shown}");
+    assert!(shown.contains("1970-01-01 08:00 (2h00m ago)"), "{shown}");
+    assert!(
+        shown.contains("tried again at 1970-01-01 11:00 (in 1h00m)"),
+        "{shown}"
+    );
+    assert!(shown.contains("resets at nine tomorrow"), "{shown}");
 }

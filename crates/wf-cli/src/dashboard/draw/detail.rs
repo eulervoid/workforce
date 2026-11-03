@@ -141,17 +141,19 @@ pub(super) fn draw_detail(
 /// Draws the full text of the selected row that opens no detail, where a detail would be: its
 /// row may cut it short.
 pub(super) fn draw_notice(frame: &mut Frame, app: &App, area: Rect) {
-    let Some((title, what)) = app.selected_notice() else {
-        return;
-    };
     let area = Rect {
         x: area.x + 1,
         width: area.width.saturating_sub(1),
         ..area
     };
-    let width = usize::from(padded(area).width);
-    let text = crate::render::machine_notice_for(title, what, Some(width));
-    frame.render_widget(Paragraph::new(ansi_text(&text)), padded(area));
+    let area = padded(area);
+    let width = usize::from(area.width);
+    // The bar, its space and the indent of the code.
+    let Some((title, paragraphs)) = app.selected_notice(width.saturating_sub(8)) else {
+        return;
+    };
+    let text = crate::render::machine_notice_for(title, paragraphs, Some(width));
+    frame.render_widget(Paragraph::new(ansi_text(&text)), area);
 }
 
 fn dimmed(text: String) -> Line<'static> {

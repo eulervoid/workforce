@@ -165,7 +165,10 @@ pub enum InboxEntry {
         what: String,
     },
     /// Something wrong with the machine: what it is and what the principal does about it.
-    MachineFault { title: String, what: String },
+    MachineFault {
+        title: String,
+        notice: view::FaultNotice,
+    },
     /// A push of the principal that lost a fork of the target, and what to do about it.
     LostPush {
         commit: CommitId,
@@ -553,12 +556,9 @@ fn waiting(
         }
     }));
     waiting.extend(
-        view::machine_fault_views(machine_faults)
+        view::machine_fault_notices(machine_faults)
             .into_iter()
-            .map(|fault| InboxEntry::MachineFault {
-                title: fault.title,
-                what: fault.what,
-            }),
+            .map(|(title, notice)| InboxEntry::MachineFault { title, notice }),
     );
     waiting
 }

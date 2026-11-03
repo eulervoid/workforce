@@ -396,12 +396,18 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
             let more = Line::from(format!("  {kind}: {what}")).themed(theme::text_dimmed());
             row.lines(first, None, vec![more])
         }
-        InboxEntry::MachineFault { title, what } | InboxEntry::LostPush { title, what, .. } => {
-            let first = vec![themed("! ", theme::attention()), Span::raw(title.clone())];
-            let more = Line::from(format!("  {what}")).themed(theme::text_dimmed());
-            row.lines(first, None, vec![more])
-        }
+        InboxEntry::MachineFault { title, notice } => fault_lines(title, &notice.what(), row),
+        InboxEntry::LostPush { title, what, .. } => fault_lines(title, what, row),
     }
+}
+
+fn fault_lines(title: &str, what: &str, row: RowLines) -> Vec<Line<'static>> {
+    let first = vec![
+        themed("! ", theme::attention()),
+        Span::raw(title.to_owned()),
+    ];
+    let more = Line::from(format!("  {what}")).themed(theme::text_dimmed());
+    row.lines(first, None, vec![more])
 }
 
 /// How long ago `since` was: `12m`, `3h05m` or `2d`.

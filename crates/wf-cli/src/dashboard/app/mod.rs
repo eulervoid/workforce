@@ -687,9 +687,10 @@ impl App {
         }
     }
 
-    /// The title and the full text of the selected row of the Now tab, if it is one that opens no
-    /// detail because its row says all there is to say, though a row may cut it short.
-    pub fn selected_notice(&self) -> Option<(&str, &str)> {
+    /// The title and the paragraphs of markdown of the selected row of the Now tab, if it is one
+    /// that opens no detail because its row says all there is to say, though a row may cut it
+    /// short. Code in it is broken into lines of at most `width` columns.
+    pub fn selected_notice(&self, width: usize) -> Option<(&str, Vec<String>)> {
         if self.tab != Tab::Now {
             return None;
         }
@@ -697,14 +698,39 @@ impl App {
             return None;
         };
         match self.waiting(key)? {
-            InboxEntry::MachineFault { title, what } | InboxEntry::LostPush { title, what, .. } => {
-                Some((title, what))
+            InboxEntry::MachineFault { title, notice } => {
+                Some((title, notice.paragraphs(&|at_ms| self.when(at_ms), width)))
             }
+            InboxEntry::LostPush { title, what, .. } => Some((title, vec![what.clone()])),
             InboxEntry::Permission { .. }
             | InboxEntry::Blocker { .. }
             | InboxEntry::Review { .. }
             | InboxEntry::Notice { .. } => None,
         }
+    }
+
+    /// A point in time as the principal reads it: `2026-11-04 14:03 (2h05m ago)`, in their time
+    /// zone.
+    fn when(&self, at_ms: u64) -> String {
+        let now_ms = self.snapshot.now_ms;
+        let Ok(at) = jiff::Timestamp::from_millisecond(i64::try_from(at_ms).unwrap_or(i64::MAX))
+        else {
+            return at_ms.to_string();
+        };
+        let clock = at
+            .to_zoned(self.time_zone.clone())
+            .strftime("%Y-%m-%d %H:%M")
+            .to_string();
+        let relative = match at_ms.cmp(&now_ms) {
+            std::cmp::Ordering::Less => {
+                format!("{} ago", crate::text::duration(now_ms - at_ms))
+            }
+            std::cmp::Ordering::Equal => "now".to_owned(),
+            std::cmp::Ordering::Greater => {
+                format!("in {}", crate::text::duration(at_ms - now_ms))
+            }
+        };
+        format!("{clock} ({relative})")
     }
 
     fn waiting(&self, key: &InboxKey) -> Option<&InboxEntry> {
