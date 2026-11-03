@@ -35,11 +35,14 @@ pub struct Snapshot {
     pub tree: GitOid,
     /// The files over [`LARGEST_FILE`], relative to the repository, which the tree lacks.
     pub left_out: Vec<String>,
+    /// The tree of the session's snapshot before this one, if it took one.
+    pub previous: Option<GitOid>,
 }
 
 /// Takes a snapshot of the agent repository of `item` for `session`, whose index in the snapshot
-/// repository is kept between snapshots, so that only the files changed since are read. Makes the
-/// snapshot repository on first use. `.gitignore` and `.gitattributes` among the files apply as
+/// repository is kept between snapshots, so that only the files changed since are read, and whose
+/// latest tree is the reference `refs/snapshots/<session>` there. Makes the snapshot repository on
+/// first use. `.gitignore` and `.gitattributes` among the files apply as
 /// in a commit.
 pub fn take_snapshot(
     workforce_directory: &Path,
@@ -50,6 +53,7 @@ pub fn take_snapshot(
     create_snapshot_repository(&repository, &bare_repository(workforce_directory))?;
     let work_tree = item_repository(workforce_directory, item);
     let index = repository.join(format!("{}.index", session.to_base32()));
+    let latest = format!("refs/snapshots/{}", session.to_base32());
     let (Some(repository_text), Some(work_tree_text), Some(index)) =
         (repository.to_str(), work_tree.to_str(), index.to_str())
     else {
@@ -59,10 +63,12 @@ pub fn take_snapshot(
         });
     };
     let environment = [("GIT_INDEX_FILE", index)];
-    let arguments = |args: &[&'static str]| {
-        let mut all = vec!["--git-dir", repository_text, "--work-tree", work_tree_text];
-        all.extend(args);
-        all
+    let arguments = |args: &[&str]| {
+        ["--git-dir", repository_text, "--work-tree", work_tree_text]
+            .iter()
+            .chain(args)
+            .map(|arg| arg.to_string())
+            .collect::<Vec<_>>()
     };
     // The files `add -A` would read: those new or changed since the last snapshot.
     let changed = spawn(
@@ -114,14 +120,40 @@ pub fn take_snapshot(
     )?
     .ok()?;
     let tree = spawn(&repository, &environment, arguments(&["write-tree"]))?.ok()?;
-    let tree = tree
+    let tree = parse_tree("write-tree", &tree)?;
+    let previous = spawn(
+        &repository,
+        &[],
+        arguments(&["rev-parse", "--verify", "--quiet", &latest]),
+    )?;
+    let previous = match previous.success {
+        true => Some(parse_tree("rev-parse", &previous.stdout)?),
+        false => None,
+    };
+    if previous != Some(tree) {
+        spawn(
+            &repository,
+            &[],
+            arguments(&["update-ref", &latest, &tree.to_string()]),
+        )?
+        .ok()?;
+    }
+    Ok(Snapshot {
+        tree,
+        left_out,
+        previous,
+    })
+}
+
+/// The tree `command` printed.
+fn parse_tree(command: &str, output: &str) -> Result<GitOid, VcsError> {
+    output
         .trim()
         .parse()
         .map_err(|_| VcsError::UnexpectedOutput {
-            command: "write-tree".into(),
-            output: tree.trim().into(),
-        })?;
-    Ok(Snapshot { tree, left_out })
+            command: command.into(),
+            output: output.trim().into(),
+        })
 }
 
 /// Makes the snapshot repository at `path` with the objects of `bare` as alternates, unless it is
@@ -236,13 +268,16 @@ mod tests {
     fn a_later_snapshot_follows_the_files_and_an_unchanged_one_has_the_same_tree() {
         let workforce = Workforce::new();
         let first = workforce.snapshot();
-        assert_eq!(workforce.snapshot(), first);
+        assert_eq!(first.previous, None);
+        let again = workforce.snapshot();
+        assert_eq!((again.tree, again.previous), (first.tree, Some(first.tree)));
 
         workforce.write("added.txt", b"added");
         std::fs::remove_file(workforce.agent().join("file.txt")).unwrap();
         let second = workforce.snapshot();
 
         assert_ne!(second.tree, first.tree);
+        assert_eq!(second.previous, Some(first.tree));
         assert_eq!(workforce.files(second.tree), [file("added.txt", "added")]);
     }
 
