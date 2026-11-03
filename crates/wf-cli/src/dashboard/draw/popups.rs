@@ -11,7 +11,7 @@ use wf_core::id::{HashId, ItemId};
 use super::chrome::SEPARATOR;
 use super::{KeysAt, Themed, accent, clear, highlight, themed};
 use crate::dashboard::app::{App, Choice, Found, Inherited, Prompt, SetInput, Starter, Written};
-use crate::dashboard::hint::{HELP, Place};
+use crate::dashboard::hint::HELP;
 use crate::render;
 use crate::theme;
 
@@ -196,24 +196,19 @@ fn draw_popup(
     inner
 }
 
-/// Draws the keys, under their title in `accent`: in sections by where they work, those of
-/// `first` first, on in the next column when they are taller than the body. The columns that do
-/// not fit beside the first are left out; returns whether any were.
-pub(super) fn draw_keys(
-    frame: &mut Frame,
-    first: Place,
-    accent: Color,
-    body: Rect,
-    base: Style,
-) -> bool {
-    let sections = HELP
-        .iter()
-        .filter(|section| section.place == first)
-        .chain(HELP.iter().filter(|section| section.place != first));
+/// Draws the keys, under their title in `accent`: in sections by where they work, the general
+/// keys in the first column and the others to their right, on in the next column when they are
+/// taller than the body. The columns that do not fit beside the first are left out; returns
+/// whether any were.
+pub(super) fn draw_keys(frame: &mut Frame, accent: Color, body: Rect, base: Style) -> bool {
     // The rows inside the borders.
     let height = usize::from(body.height.saturating_sub(2)).max(2);
     let mut columns: Vec<Vec<Line>> = vec![Vec::new()];
-    for section in sections {
+    for (index, section) in HELP.iter().enumerate() {
+        // The general keys have their column to themselves.
+        if index == 1 {
+            columns.push(Vec::new());
+        }
         let mut title = section.title.to_owned();
         let mut hints = section.hints;
         while !hints.is_empty() {

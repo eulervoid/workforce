@@ -92,34 +92,17 @@ pub const CHANGE_FILTER: Hint = Hint::key("/", KeyCode::Char('/'), "change filte
 pub const READINESS: Hint = Hint::key("F", KeyCode::Char('F'), "ready");
 pub const KEYS: Hint = Hint::key("?", KeyCode::Char('?'), "keys");
 
-/// Where keys work, as the keys popup puts them together.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Place {
-    Everywhere,
-    /// What waits on the principal: a permission request, a blocker, a review.
-    Waiting,
-    /// The list of the Items tab.
-    Items,
-    /// An item, open or selected.
-    Item,
-    EditMenu,
-    Transcript,
-    Diff,
-}
-
 /// The keys of a place, under its title.
 pub struct Section {
-    pub place: Place,
     pub title: &'static str,
     /// A row without a label goes on with the one before.
     pub hints: &'static [Hint],
 }
 
-/// Every key, by where it works, for the keys popup.
+/// Every key, by where it works, for the keys popup: the general keys, then those of each place.
 pub const HELP: &[Section] = &[
     Section {
-        place: Place::Everywhere,
-        title: "everywhere",
+        title: "general",
         hints: &[
             Hint::keys("1-4 tab", "switch tabs, also shift-tab"),
             Hint::keys("j/k g/G", "move, top, end (and follow)"),
@@ -137,8 +120,36 @@ pub const HELP: &[Section] = &[
         ],
     },
     Section {
-        place: Place::Waiting,
-        title: "what waits",
+        title: "item list",
+        hints: &[
+            Hint::keys("o O", "grouping, order"),
+            Hint::keys("/ F", "filter by title or id, by readiness"),
+            Hint::keys("esc", "clear the filter"),
+        ],
+    },
+    Section {
+        title: "item view",
+        hints: &[
+            Hint::keys("enter l", "its session, or its diff without one"),
+            Hint::keys("j/k", "scroll"),
+        ],
+    },
+    Section {
+        title: "selected item",
+        hints: &[
+            Hint::keys("s x", "start a session, stop one"),
+            Hint::keys("c", "comment"),
+            Hint::keys("e", "title and body in $EDITOR"),
+            Hint::keys("m p", "move, priority"),
+            Hint::keys("E", "the edit menu: every field"),
+            Hint::keys("", "pick with j/k enter, 1-8 or a click"),
+            Hint::keys("labels", "type to search, enter marks or creates"),
+            Hint::keys("", "enter with no text applies, esc drops"),
+            Hint::keys("D", "the diff"),
+        ],
+    },
+    Section {
+        title: "now",
         hints: &[
             Hint::keys("a d", "allow, deny a permission request"),
             Hint::keys("", "a click on allow asks for a second"),
@@ -148,40 +159,7 @@ pub const HELP: &[Section] = &[
         ],
     },
     Section {
-        place: Place::Items,
-        title: "the items list",
-        hints: &[
-            Hint::keys("o O", "grouping, order"),
-            Hint::keys("/ F", "filter by title or id, by readiness"),
-            Hint::keys("esc", "clear the filter"),
-        ],
-    },
-    Section {
-        place: Place::Item,
-        title: "an item",
-        hints: &[
-            Hint::keys("s x", "start a session, stop one"),
-            Hint::keys("c", "comment"),
-            Hint::keys("e", "title and body in $EDITOR"),
-            Hint::keys("m p", "move, priority"),
-            Hint::keys("E", "the edit menu: every field"),
-            Hint::keys("D", "the diff"),
-        ],
-    },
-    Section {
-        place: Place::EditMenu,
-        title: "the edit menu",
-        hints: &[
-            Hint::keys("j/k enter", "pick a field"),
-            Hint::keys("1-8 click", "pick it straight"),
-            Hint::keys("esc", "close"),
-            Hint::keys("labels", "typing filters, ↑/↓ move, space marks"),
-            Hint::keys("", "enter adds what is typed, else applies"),
-        ],
-    },
-    Section {
-        place: Place::Transcript,
-        title: "a transcript",
+        title: "transcript",
         hints: &[
             Hint::keys("enter f", "open or close one entry, all"),
             Hint::keys("i l", "item, diff"),
@@ -189,8 +167,7 @@ pub const HELP: &[Section] = &[
         ],
     },
     Section {
-        place: Place::Diff,
-        title: "a diff",
+        title: "diff",
         hints: &[
             Hint::keys("] [ enter", "next, previous file, fold one"),
             Hint::keys("v drag", "select lines, as vim's visual line"),
