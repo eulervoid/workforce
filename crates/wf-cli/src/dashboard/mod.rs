@@ -288,7 +288,7 @@ fn handle(
             match act::carry_out(effect, workspace, terminal) {
                 Ok(act::Outcome::Quit) => return Handled::Quit,
                 Ok(act::Outcome::Did(what)) => app.did(what, wf_store::now_ms()),
-                Ok(act::Outcome::Choose(choice)) => app.choose(choice),
+                Ok(act::Outcome::Ask(prompt)) => app.ask(prompt),
                 Ok(act::Outcome::Drafted {
                     item,
                     comment,

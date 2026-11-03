@@ -1,7 +1,9 @@
 //! Dashboard tests: items.
 
 use super::support::*;
-use crate::dashboard::app::{App, Choice, Effect, NowRow, Opened, Prompt, Scroll, Split, Starter};
+use crate::dashboard::app::{
+    App, Choice, Effect, Field, NowRow, Opened, Prompt, Scroll, Split, Starter,
+};
 use crate::dashboard::snapshot::Detail;
 use crate::theme;
 use ratatui::crossterm::event::KeyCode;
@@ -241,14 +243,14 @@ fn item_keys_act_on_the_selected_item() {
         press(&mut app, KeyCode::Char('s')),
         Some(Effect::ChooseStart { item: dashboard })
     );
-    app.choose(Choice::Start {
+    app.ask(Prompt::Choose(Choice::Start {
         item: dashboard,
         starters: vec![
             Starter::Agent(AgentName::new("coder").unwrap()),
             Starter::Agent(AgentName::new("reviewer").unwrap()),
         ],
         index: 0,
-    });
+    }));
     insta::assert_snapshot!("choose_agent", screen(&mut app, 60, 12));
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(
@@ -260,13 +262,16 @@ fn item_keys_act_on_the_selected_item() {
     );
     assert_eq!(
         press(&mut app, KeyCode::Char('m')),
-        Some(Effect::ChooseState { item: dashboard })
+        Some(Effect::Edit {
+            item: dashboard,
+            field: Field::State
+        })
     );
-    app.choose(Choice::State {
+    app.ask(Prompt::Choose(Choice::State {
         item: dashboard,
         states: vec![ItemState::Draft, ItemState::Done, ItemState::Cancelled],
         index: 0,
-    });
+    }));
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(
         press(&mut app, KeyCode::Enter),
@@ -275,14 +280,14 @@ fn item_keys_act_on_the_selected_item() {
             state: ItemState::Done
         })
     );
-    app.choose(Choice::Start {
+    app.ask(Prompt::Choose(Choice::Start {
         item: dashboard,
         starters: vec![
             Starter::Dispatcher,
             Starter::Agent(AgentName::new("coder").unwrap()),
         ],
         index: 0,
-    });
+    }));
     insta::assert_snapshot!("choose_release", screen(&mut app, 60, 12));
     assert_eq!(
         press(&mut app, KeyCode::Enter),
@@ -305,7 +310,10 @@ fn item_keys_act_on_the_selected_item() {
     );
     assert_eq!(
         press(&mut app, KeyCode::Char('e')),
-        Some(Effect::Edit { item: dashboard })
+        Some(Effect::Edit {
+            item: dashboard,
+            field: Field::Text
+        })
     );
     // An item has no session to stop.
     assert_eq!(press(&mut app, KeyCode::Char('x')), None);

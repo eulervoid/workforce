@@ -6,23 +6,25 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use tui_input::Input;
-use wf_core::id::HashId;
+use wf_core::id::{HashId, ItemId};
 
 use super::chrome::SEPARATOR;
 use super::{KeysAt, Themed, accent, clear, highlight, themed};
-use crate::dashboard::app::{App, Choice, Prompt, Starter, Written};
+use crate::dashboard::app::{App, Choice, Inherited, Prompt, SetInput, Starter, Written};
 use crate::dashboard::hint::HELP;
 use crate::render;
 use crate::theme;
 
-/// A list to pick from, at the bottom of the body, with the option picked in `accent`.
+/// A list to pick from, at the bottom of the body, with the option picked in `accent`. Returns
+/// where its options are, the first on the top row.
 pub(super) fn draw_choice(
     frame: &mut Frame,
     choice: &Choice,
     accent: Color,
     body: Rect,
     base: Style,
-) {
+) -> Rect {
+    let short = |item: &ItemId| item.short();
     let (title, options): (String, Vec<String>) = match choice {
         Choice::Start { item, starters, .. } => (
             format!(" start #{} ", item.short()),
@@ -41,22 +43,140 @@ pub(super) fn draw_choice(
                 .map(|state| format!("{} {state}", render::state_icon(*state)))
                 .collect(),
         ),
+        Choice::Field { item, fields, .. } => {
+            let width = fields
+                .iter()
+                .map(|(field, _)| field.name().chars().count())
+                .max()
+                .unwrap_or_default();
+            (
+                format!(" edit #{} ", short(item)),
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (field, value))| {
+                        format!("{}  {:<width$}  {value}", index + 1, field.name())
+                    })
+                    .collect(),
+            )
+        }
+        Choice::Priority {
+            item, priorities, ..
+        } => (
+            format!(" priority of #{} ", short(item)),
+            priorities
+                .iter()
+                .map(|priority| priority.map_or_else(|| "none".to_owned(), |p| p.to_string()))
+                .collect(),
+        ),
+        Choice::Lane { item, lanes, .. } => (
+            format!(" lane of #{} ", short(item)),
+            lanes.iter().map(ToString::to_string).collect(),
+        ),
+        Choice::Review {
+            item,
+            levels,
+            of_type,
+            ..
+        } => (
+            format!(" review of #{} ", short(item)),
+            levels_or_type(levels, of_type),
+        ),
+        Choice::Recovery {
+            item,
+            levels,
+            of_type,
+            ..
+        } => (
+            format!(" recovery of #{} ", short(item)),
+            levels_or_type(levels, of_type),
+        ),
     };
     let lines: Vec<Line> = options
         .into_iter()
         .enumerate()
-        .map(|(index, option)| {
-            if index == choice.index() {
-                Line::from(highlight(
-                    vec![Span::raw(option)],
-                    Style::from(theme::text_bold()),
-                    accent,
-                ))
-            } else {
-                Line::from(format!(" {option}"))
+        .map(|(index, option)| option_line(option, index == choice.index(), accent))
+        .collect();
+    draw_popup(frame, title, lines, body, base)
+}
+
+/// The levels of a choice, `None` as the level of the type.
+fn levels_or_type<T: std::fmt::Display>(
+    levels: &[Option<T>],
+    of_type: &Inherited<T>,
+) -> Vec<String> {
+    levels
+        .iter()
+        .map(|level| match level {
+            Some(level) => level.to_string(),
+            None => format!("the type's: {}", of_type.describe()),
+        })
+        .collect()
+}
+
+/// An option of a list to pick from, in `accent` when it is the selected one.
+fn option_line(option: impl Into<Span<'static>>, selected: bool, accent: Color) -> Line<'static> {
+    let option = option.into();
+    if selected {
+        Line::from(highlight(
+            vec![option],
+            Style::from(theme::text_bold()),
+            accent,
+        ))
+    } else {
+        Line::from(vec![Span::raw(" "), option])
+    }
+}
+
+/// The input for a set: the values listed, marked `[x]` when the item is to have them, and the
+/// typed text that enter adds. Returns where its values are, the first on the top row.
+pub(super) fn draw_set(
+    frame: &mut Frame,
+    input: &SetInput,
+    accent: Color,
+    body: Rect,
+    base: Style,
+) -> Rect {
+    let mut lines: Vec<Line> = input
+        .listed()
+        .into_iter()
+        .enumerate()
+        .map(|(index, member)| {
+            let member = &input.members[member];
+            let mark = if member.marked { "[x]" } else { "[ ]" };
+            let mut line = option_line(
+                format!("{mark} {}", member.value),
+                index == input.index,
+                accent,
+            );
+            if input.set.is_unmet(&member.value) {
+                line.push_span(themed("  no agent of its lane has it", theme::warning()));
             }
+            line
         })
         .collect();
+    if let Some(value) = input.new_value() {
+        let mut line = Line::from(themed(" enter adds ", theme::text_dimmed()));
+        line.push_span(Span::raw(value.to_owned()));
+        if input.set.is_unmet(value) {
+            line.push_span(themed("  no agent of its lane has it", theme::warning()));
+        }
+        lines.push(line);
+    } else if lines.is_empty() {
+        lines.push(Line::from(" none yet: type one").themed(theme::text_dimmed()));
+    }
+    let title = format!(" {} of #{} ", input.set.name(), input.item.short());
+    draw_popup(frame, title, lines, body, base)
+}
+
+/// Draws `lines` in a box at the bottom of the body, under `title`. Returns where the lines are.
+fn draw_popup(
+    frame: &mut Frame,
+    title: String,
+    lines: Vec<Line<'static>>,
+    body: Rect,
+    base: Style,
+) -> Rect {
     let height = (lines.len() as u16 + 2).min(body.height);
     let width = lines
         .iter()
@@ -72,14 +192,12 @@ pub(super) fn draw_choice(
         height,
     };
     clear(frame, area, base);
-    frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::bordered()
-                .border_style(Style::from(theme::divider()))
-                .title(title),
-        ),
-        area,
-    );
+    let block = Block::bordered()
+        .border_style(Style::from(theme::divider()))
+        .title(title);
+    let inner = block.inner(area);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+    inner
 }
 
 /// Draws the keys, under their title in `accent`.
@@ -132,7 +250,21 @@ pub(super) fn draw_keys(frame: &mut Frame, accent: Color, body: Rect, base: Styl
 pub(super) fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     // The label of what is asked has the accent; a question answered with keys has it on the
     // whole line.
-    let accent = accent(app, KeysAt::Footer);
+    // The set input has the keys in its list, which the label goes with.
+    let accent = accent(
+        app,
+        match prompt {
+            Prompt::Set(_) => KeysAt::Choice,
+            Prompt::Filter { .. }
+            | Prompt::Answer { .. }
+            | Prompt::Verdict { .. }
+            | Prompt::Comment { .. }
+            | Prompt::LineComment { .. }
+            | Prompt::Choose(_)
+            | Prompt::Stop { .. }
+            | Prompt::Keys => KeysAt::Footer,
+        },
+    );
     let question = |text: String| {
         Line::from(Span::styled(
             text,
@@ -174,6 +306,11 @@ pub(super) fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: R
             draw_question(frame, app, line, area);
             return;
         }
+        Prompt::Set(input) => (
+            format!("{}:", input.set.name()),
+            &input.filter,
+            "↑/↓ move · space mark · enter add or apply · esc cancel ",
+        ),
         Prompt::Choose(_) | Prompt::Keys => return,
         Prompt::Answer { blocker, input, .. } => (
             format!("⧗ {} answer:", blocker.short()),

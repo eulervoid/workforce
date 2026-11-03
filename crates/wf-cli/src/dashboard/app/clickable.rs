@@ -61,6 +61,9 @@ pub struct Clickable {
     pub strip: Option<Rect>,
     /// The links in the text, and the buttons.
     pub spots: Vec<Spot>,
+    /// The options of the choice or the values of the set input on screen, the first on the top
+    /// row.
+    pub choice: Option<Rect>,
 }
 
 impl Clickable {
