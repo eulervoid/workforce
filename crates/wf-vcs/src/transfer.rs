@@ -67,6 +67,7 @@ impl GitCli {
         let input: String = commits.iter().map(|commit| format!("{commit}\n")).collect();
         let checked = crate::git::spawn_with_input(
             &self.repository,
+            &[],
             ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
             input,
         )?

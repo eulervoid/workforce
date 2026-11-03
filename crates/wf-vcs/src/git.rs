@@ -205,6 +205,7 @@ where
 /// Like [`spawn`], with `input` on the standard input of git.
 pub(crate) fn spawn_with_input<I, S>(
     directory: &Path,
+    environment: &[(&str, &str)],
     args: I,
     input: String,
 ) -> Result<Finished, VcsError>
@@ -217,6 +218,7 @@ where
     let args: Vec<S> = args.into_iter().collect();
     let mut child = git()
         .args(&args)
+        .envs(environment.iter().copied())
         .current_dir(directory)
         .env("LC_ALL", "C")
         .env("GIT_TERMINAL_PROMPT", "0")
