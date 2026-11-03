@@ -5,7 +5,7 @@ use crate::dashboard::app::NowRow;
 use crate::dashboard::snapshot::{Detail, InView, Snapshot};
 use crate::view::SessionStatus;
 use ratatui::crossterm::event::KeyCode;
-use wf_core::id::SessionId;
+use wf_core::id::{HashId, SessionId};
 use wf_core::session::EndReason;
 
 /// The snapshot once the coder's session was stopped, with its permission request gone, and the
@@ -50,7 +50,10 @@ fn an_open_session_that_ends_says_so_and_offers_the_session_its_item_goes_on_in(
     app.refresh(coder_stopped(Some(next.clone())));
     let offered = screen(&mut app, 90, 16);
     assert!(
-        offered.contains("its item goes on in coder · work · 1m ◆"),
+        offered.contains(&format!(
+            "its item goes on in coder/{} · 1m ◆",
+            HashId::short(&next.id)
+        )),
         "{offered}"
     );
     assert!(offered.contains("n next session"), "{offered}");
@@ -228,12 +231,12 @@ fn a_session_that_lost_its_claim_says_so_and_who_has_it() {
         (
             EndReason::LeaseExpired,
             "lease_expired",
-            "■ ended: lease expired · taken over by coder · work · 1m ◆ on vm",
+            "■ ended: lease expired · taken over by coder/{} · 1m ◆ on vm",
         ),
         (
             EndReason::Outclaimed,
             "outclaimed",
-            "■ ended: outclaimed · claimed first by coder · work · 1m ◆ on vm",
+            "■ ended: outclaimed · claimed first by coder/{} · 1m ◆ on vm",
         ),
     ] {
         let mut app = app();
@@ -242,7 +245,28 @@ fn a_session_that_lost_its_claim_says_so_and_who_has_it() {
         press(&mut app, KeyCode::Enter);
         app.refresh(coder_lost_its_claim(reason));
         let screen = screen(&mut app, 90, 16);
-        assert!(screen.contains(said), "{screen}");
+        let said = said.replace("{}", &HashId::short(&next_session().id));
+        assert!(screen.contains(&said), "{screen}");
         insta::assert_snapshot!(name, screen);
     }
+}
+
+#[test]
+fn the_crumb_of_a_session_names_its_agent_and_session_with_its_age_and_status() {
+    let mut app = app();
+    let coder = app.snapshot.working[0].clone();
+    app.transcribed(coder.id, &coder_transcript());
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(session_in_view(coder.clone()));
+    app.refresh(snapshot);
+    let short = HashId::short(&coder.id);
+    let live = screen(&mut app, 90, 16);
+    assert!(live.contains(&format!("▐coder/{short} · 12m ◆▌")), "{live}");
+    app.refresh(coder_stopped(None));
+    let stopped = screen(&mut app, 90, 16);
+    assert!(
+        stopped.contains(&format!("▐coder/{short} · 12m · cancelled▌")),
+        "{stopped}"
+    );
 }

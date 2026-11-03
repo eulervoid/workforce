@@ -190,7 +190,7 @@ pub(super) fn draw_rule(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(rule).themed(theme::divider()), area);
 }
 
-/// Draws where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part
+/// Draws where the detail on screen is: `Now › #k3j1 › coder/k3j1ab · 12m ◆`. Its last part
 /// has the accent, full while the detail has the keys. Returns the parts that go back to a detail opened before, or to the list.
 pub(super) fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     // Each part, with how many of the details opened it goes back to; `None` for an item named
@@ -309,7 +309,7 @@ pub(super) fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<S
     spots
 }
 
-/// `coder · work · 12m ◆`
+/// `coder/k3j1ab · 12m ◆`
 pub(super) fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
     let status = match session.status {
         SessionStatus::Live => themed(" ◆", theme::live()),
@@ -318,9 +318,9 @@ pub(super) fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'stati
     };
     vec![
         Span::raw(format!(
-            "{} · {} · {}",
+            "{}/{} · {}",
             session.agent_name,
-            session.role.name(),
+            session.id.short(),
             age(session.started, app.snapshot.now_ms)
         )),
         status,
