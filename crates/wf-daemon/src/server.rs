@@ -324,6 +324,11 @@ async fn call(
                 })
                 .await
                 .map_err(closed)??;
+            if let Caller::Session { session, .. } = caller {
+                daemon
+                    .snapshot_at_comment(workforce, loaded, session, &event)
+                    .await;
+            }
             reply(event)
         }
         Call::SyncNow => {

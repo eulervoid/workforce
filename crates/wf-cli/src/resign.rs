@@ -106,6 +106,7 @@ pub fn import(json: bool, file: &Path, data: &DataDir, cwd: &Path) -> anyhow::Re
     )?;
     move_agent_repositories(data, &resigned, &mut moved_data)?;
     move_transcripts(data, &resigned, &mut moved_data)?;
+    move_snapshot_repositories(data, &resigned, &mut moved_data)?;
     for name in ["check-logs", "checks-passed"] {
         let from = data.workforce(&old).join(name);
         if from.is_dir() {
@@ -118,6 +119,7 @@ pub fn import(json: bool, file: &Path, data: &DataDir, cwd: &Path) -> anyhow::Re
         let carried = [
             "git",
             "repos",
+            "snapshots",
             "transcripts",
             "transcript-copies",
             "check-logs",
@@ -293,6 +295,50 @@ fn move_agent_repositories(
             (None, _) => moved
                 .dropped
                 .push(format!("repos/{name}: not the repository of an item")),
+        }
+    }
+    Ok(())
+}
+
+/// The snapshot repository of each item, which the snapshot entries of the moved transcripts name
+/// trees in. Its references and indexes, named by the old sessions, which have all ended, are left
+/// as they are.
+fn move_snapshot_repositories(
+    data: &DataDir,
+    resigned: &Resigned,
+    moved: &mut Moved,
+) -> anyhow::Result<()> {
+    let (old, new) = (
+        data.workforce(&resigned.old_workforce),
+        data.workforce(&resigned.workforce),
+    );
+    let from = wf_vcs::snapshots(&old);
+    if !from.is_dir() {
+        return Ok(());
+    }
+    let items: BTreeMap<String, ItemId> = resigned
+        .items()
+        .map(|(old, new)| (wf_vcs::item_name(old), new))
+        .collect();
+    let has_repository = wf_vcs::bare_repository(&new).join("HEAD").is_file();
+    for entry in std::fs::read_dir(&from)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match (items.get(&name), has_repository) {
+            (Some(item), true) => {
+                copy_tree(&entry.path(), &wf_vcs::snapshot_repository(&new, *item))?;
+                wf_vcs::adopt_snapshot_repository(&new, *item)?;
+                moved.moved.push(format!(
+                    "snapshots/{name} to snapshots/{}",
+                    wf_vcs::item_name(*item)
+                ));
+            }
+            (Some(_), false) => moved
+                .dropped
+                .push(format!("snapshots/{name}: the workforce has no repository")),
+            (None, _) => moved
+                .dropped
+                .push(format!("snapshots/{name}: not the snapshots of an item")),
         }
     }
     Ok(())

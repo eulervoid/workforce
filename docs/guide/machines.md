@@ -209,7 +209,8 @@ on the device that holds its principal key. Keep the older `wf` binary until thi
 4. With the new binary, from the checkout: `wf import --resign old.jsonl`. It prints the new
    workforce id, what was left out (policy events, invites, binds, other devices' profiles, a
    fork's link to its parent), and what of this machine's data was moved: the repository and its
-   item branches, each item's agent repository, transcripts, session records and check logs. A map
+   item branches, each item's agent repository and snapshots of the work, transcripts, session
+   records and check logs. A map
    of every old id to its new one, `resigned-ids.tsv`, is beside the new store. The checkout's
    `.workforce.toml` and its remote `wf` now name the new workforce.
 5. Start the daemon (`wf daemon start`) and look around: `wf status`, `wf item list`.

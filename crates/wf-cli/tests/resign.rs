@@ -170,6 +170,12 @@ fn the_export_of_a_fork_is_signed_again_as_one_workforce_with_its_local_data() {
     )
     .unwrap();
     bare.ensure_item_branch(first_item, main).unwrap();
+    std::fs::write(
+        old_directory.join("repos").join(first_name).join("new.txt"),
+        "uncommitted",
+    )
+    .unwrap();
+    let snapshot = wf_vcs::take_snapshot(&old_directory, first_item, session).unwrap();
     std::fs::create_dir_all(
         old_directory
             .join("repos")
@@ -281,6 +287,19 @@ fn the_export_of_a_fork_is_signed_again_as_one_workforce_with_its_local_data() {
     assert_eq!(
         std::fs::read_to_string(new_directory.join("check-logs/tree.log")).unwrap(),
         "ok\n"
+    );
+    // The snapshot, its committed files read through the new workforce's repository.
+    let snapshots = wf_vcs::snapshot_repository(&new_directory, new_first.parse().unwrap());
+    for (file, contents) in [("file.txt", "one\ntwo\nthree"), ("new.txt", "uncommitted")] {
+        let blob = format!("{}:{file}", snapshot.tree);
+        assert_eq!(
+            wf_vcs::testing::git_in(&snapshots, &["cat-file", "blob", &blob]),
+            contents
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(snapshots.join("objects/info/alternates")).unwrap(),
+        format!("{}\n", new_directory.join("git/objects").display())
     );
     let dropped = resigned["dropped"].to_string();
     assert!(

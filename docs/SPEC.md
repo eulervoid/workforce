@@ -374,7 +374,7 @@ module, deleted once no log of the older version is left. It writes a new workfo
   (title, body, state, step ticks, comments, links, review verdicts, merges, the target chain); the
   import refuses otherwise. It refuses too a log with a session that has not ended, an actor of
   another principal, or a policy that does not read in the current form. Local data keyed by ids (the work branches, agent repositories,
-  transcripts and session records) moves with the map; check logs, keyed by tree, carry over. The
+  transcripts and session records, the snapshot repositories) moves with the map; check logs, keyed by tree, carry over. The
   old data directory is left as it was, as the backup.
 
 ### Admission and fold
@@ -961,7 +961,7 @@ default level; an item can name another (`--recovery`).
   parts of a `.git` it may write exists (and any sandbox that cannot express per-ref write rules,
   such as a container, works the same way). Later sessions on the item continue in the same
   repository; it is removed once the item is merged, done or cancelled (a session that submits
-  without commits makes it done). A review gets a throwaway repository of the same kind with the commit
+  without commits makes it done), and the item's snapshots of the work stay. A review gets a throwaway repository of the same kind with the commit
   checked out, detached, in `<item>-review-<session>` (an empty `<item>-review-<session>` directory
   for a submission without commits), removed when it ends.
 * **Import.** The daemon copies the agent's commits into `<wf>/git` at the end of
@@ -1191,12 +1191,15 @@ was when it was written.
   daemon's own whose alternates point at `<wf>/git/objects`, git runs with
   `--work-tree=<agent repository>` and an index of the session's own
   (`<wf>/snapshots/<item>/<session>.index`, kept between snapshots so only changed files are
-  read): `add -A`, then `write-tree`. No git process reads the agent repository's `.git`, so its
+  read; its latest recorded tree is the reference `refs/snapshots/<session>` there, moved only
+  once the entry is in the transcript): `add -A`, then
+  `write-tree`. No git process reads the agent repository's `.git`, so its
   config, hooks and filters play no part; `.gitignore` and `.gitattributes` among the files apply
   as in a commit. A file over 8 MiB is left out and the snapshot names it as left out.
 * **Recorded** in the session's transcript as an entry written by wf
-  (`{"snapshot": <tree>, "at": "block" | "comment" | "turn_end", "comment": <id>?}`), and only when
-  the tree differs from the session's previous snapshot. Snapshots never enter the log: no other
+  (`{"snapshot": <tree>, "at": "block" | "comment" | "turn_end", "comment": <id>?, "left_out":
+  [<path>, ...]}`), and only when
+  the tree differs from the session's previous recorded snapshot. Snapshots never enter the log: no other
   device has their objects, and the log names only what every device can fetch. Other devices ask
   for their diffs over `wf/query/1` (section 14).
 * **Shown:** the transcript shows under each block the diff of its snapshot against the one before

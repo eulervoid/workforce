@@ -264,6 +264,8 @@ pub struct Daemon {
     /// Taken while a session ends, so that two ends of one session, such as the agent's submit
     /// and a timeout, do not both act; ends of other sessions do not wait.
     ending: Arc<keyed_locks::KeyedLocks<SessionId>>,
+    /// Taken while a snapshot of a session's work is taken, as it writes the session's index.
+    snapshotting: Arc<keyed_locks::KeyedLocks<SessionId>>,
     /// Taken while a workforce is opened, because its store can be open only once.
     opening: Arc<keyed_locks::KeyedLocks<WorkforceId>>,
     /// Held while a workforce's bare repository is made, so two callers do not both make it.
@@ -318,6 +320,7 @@ impl Daemon {
             checking: Default::default(),
             starting: runner::StartLocks::default(),
             ending: Default::default(),
+            snapshotting: Default::default(),
             opening: Default::default(),
             repositories: Default::default(),
             held: Arc::default(),

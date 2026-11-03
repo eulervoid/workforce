@@ -18,6 +18,7 @@ use wf_vcs::{ImportMode, StoppedRebase};
 
 use super::brief::{Prompt, after_turn, brief, restarted, resumed};
 use super::resume::AgentSessionRecord;
+use super::snapshots::SnapshotPoint;
 use super::start::sandboxed;
 use super::{Begin, CANCEL_GRACE, End, GRACE, Run, SILENCE_LIMIT, START_TIMEOUT, Stop, blocking};
 use crate::faults::Faults;
@@ -397,6 +398,11 @@ async fn turns(
         };
         daemon.faults.harness_answered(&run.harness);
         import_progress(daemon, loaded, run, &mut imported).await;
+        if run.role == SessionRole::Work {
+            daemon
+                .snapshot_work(run.workforce, run.item, run.session, SnapshotPoint::TurnEnd)
+                .await;
+        }
 
         // The agent submitted and ended its turn while the checks run: nothing to say to it until
         // they are done. The daemon runs them, not the agent, so the wait does not count against
