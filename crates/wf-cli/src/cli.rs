@@ -1033,6 +1033,26 @@ pub enum PolicyCommand {
         /// A TOML file with the whole policy.
         file: PathBuf,
     },
+    /// Print a preset policy to start from.
+    ///
+    /// Apply it with `wf policy preset automated > policy.toml`, then `wf policy apply
+    /// policy.toml`. Its comments say what else the preset needs.
+    Preset {
+        /// Which preset.
+        preset: PolicyPreset,
+    },
+}
+
+/// A policy `wf policy preset` prints. The sandbox is not part of the policy: each preset says in
+/// its comments what to set in the machine config.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum PolicyPreset {
+    /// Nothing is reviewed, and agents run without Fence, on a machine that is a sandbox itself.
+    Barebones,
+    /// You review every task, and agents run in Fence: the policy `wf init` starts with.
+    Simple,
+    /// An agent reviews every task, and agents run in Fence.
+    Automated,
 }
 
 #[cfg(test)]

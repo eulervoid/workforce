@@ -3,7 +3,7 @@
 use anyhow::Context;
 use wf_core::event::{Event, EventBody, PolicySet};
 use wf_core::identity::{PrincipalSigner, Signed};
-use wf_core::policy::Policy;
+use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::state::State;
 
 use super::{done, edit_until_valid, emit};
@@ -29,6 +29,9 @@ pub(super) fn policy(
     }
     match command {
         PolicyCommand::Show => emit(json, &current, |source| source.clone()),
+        PolicyCommand::Preset { preset } => {
+            emit(json, &self::preset(preset), |source| source.clone())
+        }
         PolicyCommand::Apply { file } => {
             let source = std::fs::read_to_string(&file)
                 .with_context(|| format!("reading {}", file.display()))?;
@@ -52,6 +55,46 @@ fn apply_policy(json: bool, workspace: &mut Workspace, source: String) -> anyhow
     let principal = workspace.principal_signer()?;
     let event = author_policy(workspace, &principal, source)?;
     done(json, "policy replaced".to_string(), &event, None)
+}
+
+/// The policy of `preset`: the default policy with the review level of tasks the preset gives
+/// them, after comments that say what else the preset needs.
+pub(super) fn preset(preset: PolicyPreset) -> String {
+    let (comments, review) = match preset {
+        PolicyPreset::Barebones => (
+            "# Barebones: nothing is reviewed. A task's work is merged when its agent submits it.\n\
+             # Agents run without Fence and are allowed what they ask, for a machine that is a\n\
+             # sandbox itself, such as a container. Set this in the machine config\n\
+             # (~/.config/workforce/config.toml) of each machine that runs agents:\n\
+             #\n\
+             #     [sandbox]\n\
+             #     kind = \"external\"\n\
+             #\n\
+             # With `kind = \"off\"` instead, agents run with your privileges, and what they ask\n\
+             # goes through the deciders of the machine config, then to you.\n",
+            "none",
+        ),
+        PolicyPreset::Simple => (
+            "# Simple: you review every task before its work is merged.\n\
+             # Agents run in Fence, the machine config's default sandbox.\n",
+            "manual",
+        ),
+        PolicyPreset::Automated => (
+            "# Automated: an agent reviews every task, and approved work is merged without you.\n\
+             # The `standard` review level needs an agent with the capabilities `review` and\n\
+             # `strong-model`, such as:\n\
+             #\n\
+             #     wf agent add reviewer --harness claude-code --capability review \\\n\
+             #         --capability strong-model --start auto\n\
+             #\n\
+             # `wf item add --review manual` still has you review one item.\n\
+             # Agents run in Fence, the machine config's default sandbox.\n",
+            "standard",
+        ),
+    };
+    let policy =
+        DEFAULT_POLICY_TOML.replace("review = \"manual\"\n", &format!("review = \"{review}\"\n"));
+    format!("{comments}\n{policy}")
 }
 
 /// How often a policy is signed before a refusal stands, while events keep landing.
@@ -177,6 +220,28 @@ mod tests {
 
     fn policy() -> String {
         wf_core::policy::DEFAULT_POLICY_TOML.replace("review = \"manual\"\n", "")
+    }
+
+    #[test]
+    fn each_preset_is_a_valid_policy_with_its_review_level_for_tasks() {
+        for (preset, review) in [
+            (PolicyPreset::Barebones, "none"),
+            (PolicyPreset::Simple, "manual"),
+            (PolicyPreset::Automated, "standard"),
+        ] {
+            let policy = Policy::parse(&super::preset(preset)).unwrap();
+            let task = policy
+                .types
+                .iter()
+                .find(|(name, _)| name.to_string() == "task")
+                .map(|(_, task)| task)
+                .unwrap();
+            assert_eq!(
+                task.review.as_ref().map(ToString::to_string).as_deref(),
+                Some(review),
+                "{preset:?}"
+            );
+        }
     }
 
     #[test]

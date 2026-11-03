@@ -191,6 +191,10 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         Command::Item(command) => item(json, mode, command, &mut open(json, movable, data, cwd)?),
         Command::Comment(args) => comment(json, mode, &mut open(json, movable, data, cwd)?, args),
         Command::Mentions { target } => mentions(json, &open(json, movable, data, cwd)?, &target),
+        // A preset needs no workforce.
+        Command::Policy(PolicyCommand::Preset { preset }) => {
+            emit(json, &policy::preset(preset), |source| source.clone())
+        }
         Command::Policy(command) => policy(json, command, &mut open(json, movable, data, cwd)?),
         Command::Log(args) => log(json, mode, &mut open(json, movable, data, cwd)?, args),
         Command::Stats => {

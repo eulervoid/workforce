@@ -89,6 +89,23 @@ initial = "open"
 states = ["open", "active", "done", "cancelled"]
 ```
 
+## Presets
+
+`wf policy preset <name>` prints a policy to start from. Each preset is the default policy with a
+different review level for tasks, and its comments name what else it needs. The sandbox is set
+in each machine's config, not in the policy:
+
+| Preset | Tasks reviewed by | Sandbox | Also needs |
+|---|---|---|---|
+| `barebones` | no one (`none`) | the machine's own: `[sandbox] kind = "external"` | |
+| `simple` | you (`manual`); the default policy | Fence, the default | |
+| `automated` | an agent (`standard`) | Fence, the default | an agent with `review` and `strong-model` |
+
+```sh
+wf policy preset automated > policy.toml
+wf policy apply policy.toml
+```
+
 ## `default_agent`
 
 The agent `wf session start` uses when you give no `--agent`; the default policy has none. Add it at
