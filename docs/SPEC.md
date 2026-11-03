@@ -1619,7 +1619,10 @@ directory to write to also goes in `allow_write`.
 policy and the principal as founder (handle `$USER` by default), a fresh principal key, a
 `DeviceProfile` (host name; hardware `os:…, arch:…`) and `.workforce.toml`. It lists the harnesses
 found on `PATH` with the `wf agent add` command for each, and defines no agent; `wf init -i` asks for
-the name and which agents to define.
+the name and which agents to define. The CLI keeps what is the principal's (the dialog, the principal
+key, signing the `Genesis`, `.workforce.toml`); the device wraps the genesis, writes the log and makes
+wf's repository. When a daemon runs, it does that part (`Request::Found`) and serves the workforce at
+once; otherwise the CLI does it with the device key.
 
 ### Joining a device
 

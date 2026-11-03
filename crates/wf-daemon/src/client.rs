@@ -16,6 +16,7 @@ use wf_core::state::State;
 use wf_harness::Permission;
 
 use crate::caller::{Caller, Token};
+use crate::founding::Founding;
 use crate::peers::PeerSync;
 use crate::proto::{
     Call, Credential, EndAnswer, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError,
@@ -101,9 +102,18 @@ impl DaemonClient {
         workforce: WorkforceId,
         call: Call,
     ) -> Result<T, ClientError> {
-        write_message(&mut self.stream, &Request { workforce, call })?;
+        self.request(&Request::Workforce { workforce, call })
+    }
+
+    fn request<T: DeserializeOwned>(&mut self, request: &Request) -> Result<T, ClientError> {
+        write_message(&mut self.stream, request)?;
         let reply: Reply<T> = read_message(&mut self.stream)?;
         reply.map_err(ClientError::Failed)
+    }
+
+    /// Has the daemon found the workforce of `founding` and serve it; answered with its id.
+    pub fn found(&mut self, founding: Founding) -> Result<WorkforceId, ClientError> {
+        self.request(&Request::Found(Box::new(founding)))
     }
 
     pub fn state(&mut self, workforce: WorkforceId) -> Result<State, ClientError> {
