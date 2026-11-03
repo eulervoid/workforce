@@ -42,6 +42,38 @@ fn diff_arguments(work: &Work, args: &[String]) -> Vec<String> {
     all
 }
 
+/// Writes `git diff <arguments>`, run in `directory`, to the terminal, so git's pager and diff
+/// settings apply as for `git diff`, except where `pager` says otherwise.
+pub(crate) fn show_diff_in(
+    directory: &Path,
+    arguments: &[String],
+    pager: Pager,
+) -> Result<(), VcsError> {
+    // The principal's environment stays as it is, so the pager, colors and locale are theirs.
+    let mut command = git();
+    match pager {
+        Pager::AsConfigured => {}
+        Pager::StaysOpen => {
+            let less = std::env::var("LESS").ok();
+            command.env("LESS", less_staying_open(less.as_deref()));
+        }
+    }
+    let status = command
+        .arg("diff")
+        .args(arguments)
+        .current_dir(directory)
+        .status()
+        .map_err(VcsError::Spawn)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(VcsError::Git {
+            command: format!("diff {}", arguments.join(" ")),
+            stderr: format!("exited with {status}"),
+        })
+    }
+}
+
 /// A git repository, driven through the `git` command.
 #[derive(Clone, Debug)]
 pub struct GitCli {
@@ -668,30 +700,7 @@ impl GitCli {
     /// The same diff, written to the terminal by git itself, so its pager and diff settings
     /// apply as for `git diff`, except where `pager` says otherwise.
     pub fn show_diff(&self, work: &Work, args: &[String], pager: Pager) -> Result<(), VcsError> {
-        let arguments = diff_arguments(work, args);
-        // The principal's environment stays as it is, so the pager, colors and locale are theirs.
-        let mut command = git();
-        match pager {
-            Pager::AsConfigured => {}
-            Pager::StaysOpen => {
-                let less = std::env::var("LESS").ok();
-                command.env("LESS", less_staying_open(less.as_deref()));
-            }
-        }
-        let status = command
-            .arg("diff")
-            .args(&arguments)
-            .current_dir(&self.repository)
-            .status()
-            .map_err(VcsError::Spawn)?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(VcsError::Git {
-                command: format!("diff {}", arguments.join(" ")),
-                stderr: format!("exited with {status}"),
-            })
-        }
+        show_diff_in(&self.repository, &diff_arguments(work, args), pager)
     }
 
     /// Checks `commit` out, detached, in the main checkout, which has to be clean. A commit the

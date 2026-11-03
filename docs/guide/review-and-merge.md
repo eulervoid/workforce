@@ -72,8 +72,10 @@ give an empty one.
 While an agent works on the item, the diff shows what it has committed so far: the daemon copies
 the agent's commits into wf's repository at the end of every turn. Under it, headed `uncommitted,
 against <head>`, comes what the agent has not committed, as the daemon's latest snapshot of its
-files shows it (taken at each of its comments and turn ends; `uncommitted` with `--json`). Only
-commits carry over to a later session and are what review and merge see.
+files shows it (taken at each of its comments and turn ends; `uncommitted` with `--json`). Git
+shows it too, with the same options, such as `--stat` or `-- src/`; at a terminal each part goes
+through your pager in turn, the committed part first. Only commits carry over to a later session
+and are what review and merge see.
 
 ```sh
 wf item diff k3f7 --at 5mq2      # the work when comment 5mq2 was written, committed and uncommitted apart

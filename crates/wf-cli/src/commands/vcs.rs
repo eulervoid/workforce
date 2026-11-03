@@ -253,17 +253,25 @@ pub(super) fn diff(
         }
     };
     let has_commits = git.has_commits(&work)?;
-    let uncommitted = match (&work, snapshot_here(workspace, id)?) {
-        (wf_vcs::Work::Unmerged { commit, .. }, Some(snapshot)) => {
-            Some(uncommitted_here(workspace, id, *commit, snapshot)?.diff)
-        }
+    let snapshot = match (&work, snapshot_here(workspace, id)?) {
+        (wf_vcs::Work::Unmerged { commit, .. }, Some(snapshot)) => Some((*commit, snapshot)),
         (wf_vcs::Work::Unmerged { .. } | wf_vcs::Work::Merged { .. }, _) => None,
     };
+    let workforce_directory = workspace.data.workforce(&workspace.workforce());
     match mode {
+        // Both parts through git, with the same arguments and pager, one after the other.
         Mode::Interactive if has_commits => {
             git.show_diff(&work, git_args, wf_vcs::Pager::AsConfigured)?;
-            if let Some(diff) = uncommitted {
-                print!("{}", uncommitted_text(&diff, &work.commit().to_string()));
+            if let Some((head, snapshot)) = snapshot {
+                println!("\nuncommitted, against {}", head.short());
+                wf_vcs::show_snapshot_diff(
+                    &workforce_directory,
+                    id,
+                    head,
+                    snapshot,
+                    git_args,
+                    wf_vcs::Pager::AsConfigured,
+                )?;
             }
             Ok(())
         }
@@ -281,7 +289,16 @@ pub(super) fn diff(
                 } else {
                     None
                 },
-                uncommitted,
+                uncommitted: match snapshot {
+                    Some((head, snapshot)) => Some(wf_vcs::snapshot_diff_with(
+                        &workforce_directory,
+                        id,
+                        head,
+                        snapshot,
+                        git_args,
+                    )?),
+                    None => None,
+                },
             };
             emit(json, &view, |view| {
                 diff_text(

@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::session::{CommitId, GitOid};
 
-use crate::git::{spawn, spawn_with_input};
-use crate::{VcsError, bare_repository, item_name, item_repository};
+use crate::git::{show_diff_in, spawn, spawn_with_input};
+use crate::{Pager, VcsError, bare_repository, item_name, item_repository};
 
 /// The largest file a snapshot takes; a larger one is left out and named.
 pub const LARGEST_FILE: u64 = 8 * 1024 * 1024;
@@ -200,17 +200,53 @@ pub fn snapshot_diff(
     commit: CommitId,
     tree: GitOid,
 ) -> Result<String, VcsError> {
+    let args = crate::diff::ARGS.map(String::from);
+    snapshot_diff_with(workforce_directory, item, commit, tree, &args)
+}
+
+/// The same diff with `args` added to `git diff`, such as `--stat` or `-- src/`, as
+/// [`crate::GitCli::diff`] takes them.
+pub fn snapshot_diff_with(
+    workforce_directory: &Path,
+    item: ItemId,
+    commit: CommitId,
+    tree: GitOid,
+    args: &[String],
+) -> Result<String, VcsError> {
     let repository = snapshot_repository(workforce_directory, item);
-    let (commit, tree) = (commit.to_string(), tree.to_string());
     spawn(
         &repository,
         &[],
-        ["diff"]
+        ["diff".to_string()]
             .into_iter()
-            .chain(crate::diff::ARGS)
-            .chain([commit.as_str(), tree.as_str()]),
+            .chain(snapshot_diff_arguments(commit, tree, args)),
     )?
     .ok()
+}
+
+/// The same diff with `args`, written to the terminal by git itself, as
+/// [`crate::GitCli::show_diff`] does.
+pub fn show_snapshot_diff(
+    workforce_directory: &Path,
+    item: ItemId,
+    commit: CommitId,
+    tree: GitOid,
+    args: &[String],
+    pager: Pager,
+) -> Result<(), VcsError> {
+    let repository = snapshot_repository(workforce_directory, item);
+    show_diff_in(
+        &repository,
+        &snapshot_diff_arguments(commit, tree, args),
+        pager,
+    )
+}
+
+/// The revisions of the diff of `tree` against `commit`, then `args`, whose paths follow `--`.
+fn snapshot_diff_arguments(commit: CommitId, tree: GitOid, args: &[String]) -> Vec<String> {
+    let mut all = vec![commit.to_string(), tree.to_string()];
+    all.extend(args.iter().cloned());
+    all
 }
 
 /// The tree `command` printed.

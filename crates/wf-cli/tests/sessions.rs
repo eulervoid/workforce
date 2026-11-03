@@ -3402,6 +3402,36 @@ hang
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_options_given_to_git_apply_to_the_uncommitted_part_too() {
+    let script = "\
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m \"add hello\"
+sh mkdir src && echo kept > src/kept.txt && echo other > other.txt
+wf comment {item} \"drafting\"
+hang
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Drafts in src"]);
+    start_session(&world, &item);
+    world
+        .wait("the snapshot at the comment", |world| {
+            world.wf.json(&["item", "diff", short(&item)])["uncommitted"]
+                .as_str()
+                .is_some_and(|uncommitted| uncommitted.contains("+kept"))
+        })
+        .await;
+
+    let diff = world.wf.json(&["item", "diff", short(&item), "--stat"]);
+    let uncommitted = diff["uncommitted"].as_str().unwrap();
+    assert!(uncommitted.contains("src/kept.txt | "), "{diff}");
+    assert!(!uncommitted.contains("+kept"), "{diff}");
+    let diff = world.wf.json(&["item", "diff", short(&item), "--", "src/"]);
+    let uncommitted = diff["uncommitted"].as_str().unwrap();
+    assert!(uncommitted.contains("+kept"), "{diff}");
+    assert!(!uncommitted.contains("other.txt"), "{diff}");
+    assert!(diff["committed"] == "", "{diff}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_comment_shows_the_work_at_it_also_once_the_item_is_merged() {
     let script = "\
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m \"add hello\"
