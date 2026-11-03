@@ -202,7 +202,7 @@ impl Place {
 /// macOS the orphans whose environment is hidden. Takes some milliseconds, as it reads every
 /// process.
 fn list() -> Vec<Process> {
-    let mut system = System::new();
+    let mut system = System::new().expect("sysinfo supports the platforms the daemon runs on");
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
@@ -540,7 +540,7 @@ pub(crate) mod testing {
     fn runs_sleep(pid: Pid) -> bool {
         use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
         let pid = sysinfo::Pid::from_u32(pid.as_raw() as u32);
-        let mut system = System::new();
+        let mut system = System::new().expect("sysinfo supports this platform");
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[pid]),
             true,
