@@ -1188,38 +1188,37 @@ was when it was written.
   * a **comment** by the session on its item, after the import that sets its `head`;
   * the **end of a turn**, which is also where a session parks on a blocker.
 * **How:** in the item's snapshot repository, `<wf>/snapshots/<item>`, a bare repository of the
-  daemon's own whose alternates point at `<wf>/git/objects`, git runs with
-  `--work-tree=<agent repository>` and an index of the session's own
-  (`<wf>/snapshots/<item>/<session>.index`, kept between snapshots so only changed files are
-  read; its latest recorded tree is the reference `refs/snapshots/<session>` there, moved only
-  once the entry is in the transcript; where the branch was when the session started is
-  `refs/started/<session>`): `add -A`, then `write-tree`. No git process reads the agent repository's `.git`, so its
-  config, hooks and filters play no part; `.gitignore` and `.gitattributes` among the files apply
-  as in a commit. A file over 8 MiB is left out and the snapshot names it as left out.
-* **Recorded** in the session's transcript as an entry written by wf
-  (`{"snapshot": <tree>, "head": <commit>?, "base": <commit>?, "at": "block" | "comment" |
-  "turn_end", "comment": <id>?, "left_out": [<path>, ...], "changes": {"against": <tree or
-  commit>, "files": [{"path", "change", "added", "removed"}, ...]}}`, `head` where the item's
-  branch was, `base` its merge base with the target then, `changes` the files it changed against
-  the session's previous recorded snapshot, the first against where the branch was when the
-  session started), at a comment always, so
-  that the comment finds it, and otherwise only when the tree differs from the session's previous
-  recorded snapshot. Snapshots never enter the log: no other
-  device has their objects, and the log names only what every device can fetch. Other devices ask
-  for their diffs over `wf/query/3` (section 14; `3`: `Changes` was added).
+  daemon's own whose alternates point at `<wf>/git/objects`, git runs with `--work-tree=<agent
+  repository>` and an index of the session's own (`<wf>/snapshots/<item>/<session>.index`, kept
+  between snapshots so only changed files are read; its latest recorded tree is the reference
+  `refs/snapshots/<session>` there, moved only once the entry is in the transcript; where the branch
+  was when the session started is `refs/started/<session>`): `add -A`, then `write-tree`. No git
+  process reads the agent repository's `.git`, so its config, hooks and filters play no part;
+  `.gitignore` and `.gitattributes` among the files apply as in a commit. A file over 8 MiB is left
+  out and the snapshot names it as left out.
+* **Recorded** in the session's transcript as an entry written by wf (`{"snapshot": <tree>, "head":
+  <commit>?, "base": <commit>?, "at": "block" | "comment" | "turn_end", "comment": <id>?,
+  "left_out": [<path>, ...], "changes": {"against": <tree or commit>, "files": [{"path", "change",
+  "added", "removed"}, ...]}}`, `head` where the item's branch was, `base` its merge base with the
+  target then, `changes` the files it changed against the session's previous recorded snapshot, the
+  first against where the branch was when the session started), at a comment always, so that the
+  comment finds it, and otherwise only when the tree differs from the session's previous recorded
+  snapshot. Snapshots never enter the log: no other device has their objects, and the log names only
+  what every device can fetch. Other devices ask for their diffs over `wf/query/3` (section 14; `3`:
+  `Changes` was added).
 * **Shown:** the transcript (the dashboard and `wf session watch`) shows under each block the files
-  its snapshot changed against the one before (the session's first against the branch's head when
-  it started), from its entry, folded to their headers as in the diff; in the dashboard `enter` on
-  them opens their diff in place, asked once of the session's device (`Query::Changes`). A
-  snapshot that comes after a turn's footer, as when the agent ended the turn right after its
-  text, shows below it. The diffs that edit tool calls carry stay as they are; a comment by a work session
-  shows the work at its snapshot against the target, committed (from its `base`, so a later merge
-  leaves it as it was) and uncommitted (against its `head`) apart. A comment resolving a blocker that parked a session shows the snapshot the session parked
-  on, which is the work as the one who resolved it saw it, as a parked session changes nothing. The
-  live diff's uncommitted part is the latest snapshot against the head. In the dashboard, `w` on an
-  item opens a chooser of its comments that show work, the newest first, and in the item's detail the
-  id of such a comment is a link; either opens the work at it, read-only. `wf item diff --at
-  <comment>` prints the same.
+  its snapshot changed against the one before (the session's first against the branch's head when it
+  started), from its entry, folded to their headers as in the diff; in the dashboard `enter` on them
+  opens their diff in place, asked once of the session's device (`Query::Changes`). A snapshot that
+  comes after a turn's footer, as when the agent ended the turn right after its text, shows below
+  it. The diffs that edit tool calls carry stay as they are; a comment by a work session shows the
+  work at its snapshot against the target, committed (from its `base`, so a later merge leaves it as
+  it was) and uncommitted (against its `head`) apart. A comment resolving a blocker that parked a
+  session shows the snapshot the session parked on, which is the work as the one who resolved it saw
+  it, as a parked session changes nothing. The live diff's uncommitted part is the latest snapshot
+  against the head. In the dashboard, `w` on an item opens a chooser of its comments that show work,
+  the newest first, and in the item's detail the id of such a comment is a link; either opens the
+  work at it, read-only. `wf item diff --at <comment>` prints the same.
 * The snapshot repository is kept as long as the transcripts of the item's sessions; the daemon
   never packs or prunes it.
 

@@ -101,7 +101,6 @@ impl DiffLine {
 }
 
 impl FileDiff {
-    /// How many lines it adds and removes.
     /// The file as a list of the files of a diff names it: what changed and how many lines.
     pub fn changed(&self) -> ChangedFile {
         let (added, removed) = self.counts();
