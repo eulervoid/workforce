@@ -561,7 +561,8 @@ impl WorkBrief {
              - Report while you work: `wf comment {item} \"<what you chose, what you rejected, and why>\" --step <number>`\n  \
              - Add `--done` to tick the step with the same command.\n  \
              - Leave out `--step` for a report on the whole item.\n  \
-             - Write each report so that it makes sense on its own.",
+             - Write each report so that it makes sense on its own.\n  \
+             - Write it in markdown: `code` for names, paths and commands, a list for several points.",
             branch = self.branch,
             target = self.target,
         );
