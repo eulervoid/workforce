@@ -77,6 +77,22 @@ pub trait EventStore {
     /// At most `limit` of the events appended at `position` and after, in order.
     fn log_page(&self, position: u64, limit: usize) -> Result<Vec<Event>, StoreError>;
 
+    /// The events appended at each of `positions`, in the order given; a position beyond the
+    /// log is an error.
+    fn events_at(&self, positions: &[u64]) -> Result<Vec<Event>, StoreError> {
+        positions
+            .iter()
+            .map(|position| {
+                let id = self.log_id(*position)?.ok_or_else(|| {
+                    StoreError::Inconsistent(format!("the log has no position {position}"))
+                })?;
+                self.event(&id)?.ok_or_else(|| {
+                    StoreError::Inconsistent("the log points at a missing event".into())
+                })
+            })
+            .collect()
+    }
+
     fn pending(&self) -> Result<Vec<Event>, StoreError>;
 
     /// The bytes of the latest snapshot.

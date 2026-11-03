@@ -4,11 +4,12 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 
 use tokio::sync::{oneshot, watch};
+use wf_core::activity_index::ActivityIndex;
 use wf_core::event::Event;
-use wf_core::id::{EventId, WorkforceId};
+use wf_core::id::{EventId, ItemId, WorkforceId};
 use wf_core::identity::{DeviceKey, Signature};
 use wf_core::invite::JoinRefusal;
 use wf_core::sync::{BatchReceived, Versions};
@@ -31,6 +32,7 @@ impl From<StorageClosed> for LogError {
 #[derive(Clone)]
 pub struct StorageHandle {
     jobs: mpsc::Sender<Job>,
+    activity: Arc<Mutex<ActivityIndex>>,
     heads: watch::Receiver<BTreeSet<EventId>>,
 }
 
@@ -93,7 +95,51 @@ impl StorageHandle {
                 });
             }
         });
-        Self { jobs, heads }
+        Self {
+            jobs,
+            activity: Arc::default(),
+            heads,
+        }
+    }
+
+    /// The events that can show in the activity of any of `items`, in log order. The log is read
+    /// only at the positions of the events that can concern them, which the index of the log
+    /// finds; the index takes in the events appended since it was last used.
+    pub async fn item_events(
+        &self,
+        items: Vec<ItemId>,
+    ) -> Result<Result<Vec<Event>, StoreError>, StorageClosed> {
+        let activity = Arc::clone(&self.activity);
+        self.with(move |replica| {
+            let mut index = activity
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let log_len = wf_store::EventStore::log_len(replica.store())?;
+            while index.len() < log_len {
+                let page = wf_store::EventStore::log_page(
+                    replica.store(),
+                    index.len(),
+                    crate::proto::EVENTS_PER_PAGE,
+                )?;
+                if page.is_empty() {
+                    break;
+                }
+                for event in &page {
+                    index.push(replica.state(), event);
+                }
+            }
+            let positions = index.candidates(replica.state(), &items);
+            let events = wf_store::EventStore::events_at(replica.store(), &positions)?;
+            Ok(events
+                .into_iter()
+                .filter(|event| {
+                    items
+                        .iter()
+                        .any(|item| replica.state().can_be_activity_of(*item, event))
+                })
+                .collect())
+        })
+        .await
     }
 
     /// Whether the task has ended: the workforce has to be opened again.
@@ -235,5 +281,96 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn the_events_of_an_item_are_those_that_can_show_in_its_activity_also_as_the_log_grows() {
+        use wf_core::testing::{comment, create};
+
+        let fixture = Fixture::new(1);
+        let storage = handle(&fixture);
+        let mut state = fixture.state();
+        let mut clock = 2_000;
+        let mut write = |body| {
+            clock += 1;
+            fixture.apply(&mut state, 0, clock, body)
+        };
+        let first = write(create("task", "first"));
+        let second = write(create("task", "second"));
+        let first_item: ItemId = first.id().into();
+        let second_item: ItemId = second.id().into();
+        let own = write(comment(first_item, "about the first"));
+        let elsewhere = write(comment(second_item, "about the second"));
+        let receive = |events: Vec<Event>| {
+            storage.with(move |replica| {
+                for event in events {
+                    replica.receive(event).unwrap();
+                }
+            })
+        };
+        receive(vec![first.clone(), second.clone(), own.clone()])
+            .await
+            .unwrap();
+        let events = storage
+            .item_events(vec![first_item])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(events, [first.clone(), own.clone()]);
+
+        receive(vec![elsewhere.clone()]).await.unwrap();
+        let events = storage
+            .item_events(vec![second_item])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(events, [second, elsewhere]);
+        let events = storage
+            .item_events(vec![first_item])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(events, [first, own]);
+    }
+
+    #[tokio::test]
+    async fn zz_bench() {
+        use wf_core::testing::{comment, create};
+        let fixture = Fixture::new(1);
+        let storage = handle(&fixture);
+        let mut state = fixture.state();
+        let mut clock = 2_000;
+        let mut items = vec![];
+        let mut events = vec![];
+        for i in 0..70 {
+            clock += 1;
+            let e = fixture.apply(&mut state, 0, clock, create("task", &format!("t{i}")));
+            items.push(ItemId::from(e.id()));
+            events.push(e);
+        }
+        for i in 0..6300 {
+            clock += 1;
+            let item = items[i % 70];
+            events.push(fixture.apply(&mut state, 0, clock, comment(item, &format!("some reasonably long comment text number {i} about things and stuff, with details of the work done so far"))));
+        }
+        storage.with(move |r| for e in events { r.receive(e).unwrap(); }).await.unwrap();
+        let t = std::time::Instant::now();
+        let old = storage.with(move |replica| {
+            let item = items[5];
+            let mut kept = vec![]; let mut pos = 0;
+            loop {
+                let page = wf_store::EventStore::log_page(replica.store(), pos, 512).unwrap();
+                if page.is_empty() { break kept; }
+                pos += page.len() as u64;
+                kept.extend(page.into_iter().filter(|e| replica.state().can_be_activity_of(item, e)));
+            }
+        }).await.unwrap();
+        eprintln!("OLD {:?} n={}", t.elapsed(), old.len());
+        let item = ItemId::from(old[0].id());
+        for round in 0..3 {
+            let t = std::time::Instant::now();
+            let new = storage.item_events(vec![item]).await.unwrap().unwrap();
+            eprintln!("NEW round {round} {:?} n={}", t.elapsed(), new.len());
+        }
     }
 }

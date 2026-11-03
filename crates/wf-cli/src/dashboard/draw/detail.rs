@@ -138,6 +138,25 @@ pub(super) fn draw_detail(
     Some(drawn)
 }
 
+/// Draws the full text of the selected row that opens no detail, where a detail would be: its
+/// row may cut it short.
+pub(super) fn draw_notice(frame: &mut Frame, app: &App, area: Rect) {
+    let Some((title, what)) = app.selected_notice() else {
+        return;
+    };
+    let text = Text::from(vec![
+        Line::from(vec![themed("! ", theme::attention()), Span::raw(title)]),
+        Line::default(),
+        Line::from(what).themed(theme::text_dimmed()),
+    ]);
+    let area = Rect {
+        x: area.x + 1,
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), padded(area));
+}
+
 fn dimmed(text: String) -> Line<'static> {
     Line::from(format!(" {text}")).themed(theme::text_dimmed())
 }

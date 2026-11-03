@@ -160,6 +160,24 @@ impl EventStore for RedbStore {
         Ok(result)
     }
 
+    fn events_at(&self, positions: &[u64]) -> Result<Vec<Event>, StoreError> {
+        let transaction = self.database.begin_read()?;
+        let log = transaction.open_table(LOG)?;
+        let events = transaction.open_table(EVENTS)?;
+        positions
+            .iter()
+            .map(|position| {
+                let id = log.get(*position)?.ok_or_else(|| {
+                    StoreError::Inconsistent(format!("the log has no position {position}"))
+                })?;
+                let bytes = events.get(id.value())?.ok_or_else(|| {
+                    StoreError::Inconsistent("the log points at a missing event".into())
+                })?;
+                Ok(Event::decode(bytes.value())?)
+            })
+            .collect()
+    }
+
     fn pending(&self) -> Result<Vec<Event>, StoreError> {
         let transaction = self.database.begin_read()?;
         decode_all(transaction.open_table(PENDING)?.iter()?)

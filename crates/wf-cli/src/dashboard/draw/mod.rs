@@ -11,12 +11,12 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Styled};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph};
 
 use self::chrome::{
     counts_line, draw_header, draw_hints, draw_rule, draw_tip, draw_warning, latest_line,
 };
-use self::detail::{draw_detail, draw_log};
+use self::detail::{draw_detail, draw_log, draw_notice};
 use self::lists::{
     ListLines, agents_lines, draw_indicator, draw_list, items_lines, now_lines, row,
 };
@@ -291,49 +291,9 @@ pub(super) fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     shown
 }
 
-/// Draws the full text of the selected row that a row cuts short, above the panes; returns what
-/// is left of `area`.
-fn draw_banner(frame: &mut Frame, app: &App, area: Rect) -> Rect {
-    let Some((title, what)) = app.selected_notice() else {
-        return area;
-    };
-    let text = Text::from(vec![
-        Line::from(vec![themed("! ", theme::attention()), Span::raw(title)]),
-        Line::from(what).themed(theme::text_dimmed()),
-    ]);
-    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
-    let text_area = padded(Rect {
-        x: area.x + 1,
-        width: area.width.saturating_sub(1),
-        ..area
-    });
-    // At most half of the body, so the list stays usable.
-    let lines = u16::try_from(paragraph.line_count(text_area.width)).unwrap_or(u16::MAX);
-    let height = lines.min(area.height / 2);
-    let [banner, rule, rest] = Layout::vertical([
-        Constraint::Length(height),
-        Constraint::Length(u16::from(height > 0)),
-        Constraint::Fill(1),
-    ])
-    .areas(area);
-    frame.render_widget(
-        paragraph,
-        padded(Rect {
-            x: banner.x + 1,
-            width: banner.width.saturating_sub(1),
-            ..banner
-        }),
-    );
-    draw_rule(frame, rule);
-    rest
-}
-
 pub(super) fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
     match app.tab {
-        Tab::Now => {
-            let area = draw_banner(frame, app, area);
-            draw_split(frame, app, area, now_lines)
-        }
+        Tab::Now => draw_split(frame, app, area, now_lines),
         Tab::Items => draw_split(frame, app, area, items_lines),
         Tab::Log => {
             let mut spots = Vec::new();
@@ -405,7 +365,13 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
     let (list_top, list) = draw_list(frame, app, list_lines, list, &mut spots);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
     frame.render_widget(Paragraph::new(rule_text).themed(theme::divider()), rule);
-    let shown = in_view.and_then(|opened| draw_detail(frame, app, opened, detail, &mut spots));
+    let shown = match in_view {
+        Some(opened) => draw_detail(frame, app, opened, detail, &mut spots),
+        None => {
+            draw_notice(frame, app, detail);
+            None
+        }
+    };
     Drawn {
         list_top: Some(list_top),
         clickable: Clickable {

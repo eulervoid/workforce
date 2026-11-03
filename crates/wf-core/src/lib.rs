@@ -1,6 +1,7 @@
 //! `wf-core` is pure: no IO, no async, no clock or randomness except through parameters.
 
 pub mod activity;
+pub mod activity_index;
 pub mod autonomy;
 pub mod body;
 pub mod brief;

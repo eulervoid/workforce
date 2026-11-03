@@ -1,4 +1,5 @@
 use crate::activity::Activity;
+use crate::activity_index::ActivityIndex;
 use crate::event::{Event, EventBody, ItemMoved};
 use crate::id::{CommentId, HashId, ItemId, SessionId};
 use crate::item::ItemState;
@@ -42,6 +43,17 @@ impl Log {
             .filter(|event| self.state.can_be_activity_of(item, event))
             .cloned()
             .collect();
+        let mut index = ActivityIndex::default();
+        for event in &self.events {
+            index.push(&self.state, event);
+        }
+        let indexed: Vec<Event> = index
+            .candidates(&self.state, &[item])
+            .into_iter()
+            .map(|position| self.events[position as usize].clone())
+            .filter(|event| self.state.can_be_activity_of(item, event))
+            .collect();
+        assert_eq!(indexed, candidates, "the index leaves out an event");
         let activity = |events: &[Event]| -> Vec<Activity> {
             self.state
                 .activity(item, events)
