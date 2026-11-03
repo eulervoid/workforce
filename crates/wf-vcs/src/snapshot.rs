@@ -172,6 +172,15 @@ fn parse_tree(command: &str, output: &str) -> Result<GitOid, VcsError> {
         })
 }
 
+/// Points the snapshot repository of `item`, copied in from another workforce's data, at the
+/// objects of this workforce's bare repository, which has those of the other.
+pub fn adopt_snapshot_repository(workforce_directory: &Path, item: ItemId) -> Result<(), VcsError> {
+    set_alternates(
+        &snapshot_repository(workforce_directory, item),
+        &bare_repository(workforce_directory),
+    )
+}
+
 /// Makes the snapshot repository at `path` with the objects of `bare` as alternates, unless it is
 /// there already.
 fn create_snapshot_repository(path: &Path, bare: &Path) -> Result<(), VcsError> {
@@ -181,6 +190,10 @@ fn create_snapshot_repository(path: &Path, bare: &Path) -> Result<(), VcsError> 
     std::fs::create_dir_all(path)?;
     // No templates: the principal's `init.templateDir` has nothing a snapshot needs.
     spawn(path, &[], ["init", "--bare", "--quiet", "--template="])?.ok()?;
+    set_alternates(path, bare)
+}
+
+fn set_alternates(path: &Path, bare: &Path) -> Result<(), VcsError> {
     let alternates = path.join("objects/info");
     std::fs::create_dir_all(&alternates)?;
     std::fs::write(
