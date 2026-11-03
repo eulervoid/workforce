@@ -1206,7 +1206,7 @@ was when it was written.
   that the comment finds it, and otherwise only when the tree differs from the session's previous
   recorded snapshot. Snapshots never enter the log: no other
   device has their objects, and the log names only what every device can fetch. Other devices ask
-  for their diffs over `wf/query/2` (section 14).
+  for their diffs over `wf/query/3` (section 14; `3`: `Changes` was added).
 * **Shown:** the transcript shows under each block the diff of its snapshot against the one before
   (the session's first against the branch's head when it started); a comment by a work session
   shows the work at its snapshot against the target, committed (from its `base`, so a later merge
@@ -1652,7 +1652,7 @@ directory to write to also goes in `allow_write`.
 * Those values are used to scrub: exact match plus base64, URL and hex encodings, then gitleaks-style
   pattern scanning. Comments of agent sessions pass this redaction before signing.
 * Transcripts are never synced. The principal follows a session of another device of their own by
-  asking that device for its transcript (`wf/query/2`, section 14); the asker keeps a copy as a
+  asking that device for its transcript (`wf/query/3`, section 14); the asker keeps a copy as a
   cache. No redaction comes first: every device of the workforce belongs to its one principal and
   is trusted, and a transcript goes only to a bound device, which already runs that principal's
   agents. A per-workforce `publish = none | redacted | full` comes with stage 3 and 4 (M7), when
@@ -1710,7 +1710,7 @@ mDNS for LAN-only use.
   `git upload-pack` say to each other; wf only moves the bytes. Members only (`403` otherwise); a
   node that serves no repository answers `404`, and one already serving the device four fetches
   `429`. Neither side waits more than 30 s of silence.
-* **`wf/query/2`**: a device asks another for what only it has, read from its current state and
+* **`wf/query/3`**: a device asks another for what only it has, read from its current state and
   changing and storing nothing: the live diff of an item, which only the device with its branch and
   agent repository has, and the transcript of a session, which only its device writes. One request,
   one answer of the type the request names. `Query::Diff { workforce, item, since }` (the head commit and
@@ -1725,7 +1725,12 @@ mDNS for LAN-only use.
   the head (`NotHere` on a device without it). `at` names the snapshot as the log does, since only
   the session's device has its transcript: `Taken { session, comment }`, recorded at the session's
   own comment, or `Parked { session, blocker }`, the last one the session recorded from its blocker
-  on before it was prompted again; the asker picks it from the log (`State::comment_snapshot`). The daemon reads what is uncommitted only through
+  on before it was prompted again; the asker picks it from the log (`State::comment_snapshot`).
+  `Query::Changes { workforce, item, session, against, snapshot }` is answered with a
+  `ChangesAnswer`: `Changes` (the diff of the snapshot against `against`, as git prints it),
+  `NotHere` (the session's transcript records no such snapshot with what it changed against
+  `against`) or `TooLarge`; the asker takes both trees from the snapshot's entry in the transcript
+  (section 10). The daemon reads what is uncommitted only through
   snapshots (section 10), never by running git with the agent repository's `.git`. A live view
   is asked of one device and never stored or synced; iroh-docs would replicate every snapshot to
   every replica whether anyone looks. `Query::Transcript { workforce, session, from }` is answered

@@ -829,6 +829,22 @@ async fn snapshot_diff(
     blocking(move || connect(&socket).snapshot_diff(workforce, item, at).unwrap()).await
 }
 
+async fn snapshot_changes(
+    socket: &Path,
+    workforce: wf_core::id::WorkforceId,
+    item: wf_core::id::ItemId,
+    session: wf_core::id::SessionId,
+    (against, snapshot): (wf_core::session::GitOid, wf_core::session::GitOid),
+) -> wf_daemon::proto::ChangesDiff {
+    let socket = socket.to_path_buf();
+    blocking(move || {
+        connect(&socket)
+            .snapshot_changes(workforce, item, session, against, snapshot)
+            .unwrap()
+    })
+    .await
+}
+
 /// Writes `notes.md` in the agent repository of `item` without committing it, and has the daemon
 /// of `directory` record a snapshot of it for `session` as it does at a comment: in the snapshot
 /// repository and as an entry of the session's transcript (SPEC §10) that names `comment`.
@@ -944,6 +960,56 @@ async fn a_session_on_this_device_is_answered_from_its_agent_repository() {
         snapshot_diff(&running.socket, workforce, item, elsewhere).await,
         wf_daemon::proto::SnapshotDiff::Answer(DiffAnswer::NotHere)
     );
+
+    // A block after the comment changes the file again, and its entry records what it changed.
+    let workforce_directory = DataDir::new(directory.to_path_buf()).workforce(&workforce);
+    let agent_repository = wf_vcs::item_repository(&workforce_directory, item);
+    std::fs::write(agent_repository.join("notes.md"), "final\n").unwrap();
+    let block = wf_vcs::take_snapshot(&workforce_directory, item, session).unwrap();
+    let entry = serde_json::json!({
+        "at": "2026-11-03T12:01:00Z",
+        "direction": "wf",
+        "message": {
+            "snapshot": block.tree.to_string(),
+            "at": "block",
+            "left_out": [],
+            "changes": {"against": tree.to_string(), "files": []},
+        },
+    });
+    let transcript = DataDir::new(directory.to_path_buf()).transcript(&workforce, session);
+    let mut lines = std::fs::read_to_string(&transcript).unwrap();
+    lines.push_str(&format!("{entry}\n"));
+    std::fs::write(&transcript, lines).unwrap();
+    let wf_daemon::proto::ChangesDiff::Answer(wf_net::ChangesAnswer::Changes(changes)) =
+        snapshot_changes(
+            &running.socket,
+            workforce,
+            item,
+            session,
+            (tree, block.tree),
+        )
+        .await
+    else {
+        panic!("the daemon answers with what the block changed");
+    };
+    assert!(
+        changes.contains("-draft") && changes.contains("+final"),
+        "{changes}"
+    );
+    for (against, snapshot) in [(block.tree, tree), (block.tree, block.tree)] {
+        assert_eq!(
+            snapshot_changes(
+                &running.socket,
+                workforce,
+                item,
+                session,
+                (against, snapshot)
+            )
+            .await,
+            wf_daemon::proto::ChangesDiff::Answer(wf_net::ChangesAnswer::NotHere),
+            "only what the transcript records"
+        );
+    }
 
     // The branch and the agent repository are gone, as after the session ended.
     let agent_repository = wf_vcs::item_repository(

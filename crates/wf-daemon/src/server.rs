@@ -139,7 +139,8 @@ async fn answer_call(
         | Call::SnapshotDiff { .. }
         | Call::TargetCommit
         | Call::AwaitedCommits
-        | Call::FollowTranscript(_) => daemon.workforce(workforce).await,
+        | Call::FollowTranscript(_)
+        | Call::SnapshotChanges { .. } => daemon.workforce(workforce).await,
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
@@ -203,6 +204,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         Call::LiveDiff { .. } => principals("ask for a live diff"),
         Call::SnapshotDiff { .. } => principals("ask for the work at a comment"),
         Call::FollowTranscript(_) => principals("follow the transcripts of other devices"),
+        Call::SnapshotChanges { .. } => principals("ask for what a block of tool calls changed"),
     }
 }
 
@@ -395,6 +397,25 @@ async fn call(
         Call::SnapshotDiff { item, at } => {
             let diff = daemon
                 .snapshot_diff(workforce, item, at)
+                .await
+                .map_err(|error| wf_core::error_chain(&error))?;
+            reply(diff)
+        }
+        Call::SnapshotChanges {
+            item,
+            session,
+            against,
+            snapshot,
+        } => {
+            let request = wf_net::ChangesRequest {
+                workforce,
+                item,
+                session,
+                against,
+                snapshot,
+            };
+            let diff = daemon
+                .snapshot_changes(request)
                 .await
                 .map_err(|error| wf_core::error_chain(&error))?;
             reply(diff)

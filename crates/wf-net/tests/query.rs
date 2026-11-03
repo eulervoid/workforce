@@ -1,4 +1,4 @@
-//! `wf/query/2` in memory, and between two real endpoints.
+//! `wf/query/3` in memory, and between two real endpoints.
 
 mod common;
 
@@ -16,9 +16,10 @@ use wf_core::session::{CommentSnapshot, CommitId, GitOid};
 use wf_core::testing::*;
 use wf_net::frame::{FrameError, MAX_FRAME_LEN};
 use wf_net::{
-    DiffAnswer, DiffRequest, Network, Node, Query, QueryError, QuerySource, SnapshotRequest,
-    SourceError, TRANSCRIPT_PART_LEN, TranscriptAnswer, TranscriptRequest, Uncommitted, Work,
-    WorkAt, query_initiate, query_initiate_within, query_respond, query_respond_within, read_query,
+    ChangesAnswer, ChangesRequest, DiffAnswer, DiffRequest, Network, Node, Query, QueryError,
+    QuerySource, SnapshotRequest, SourceError, TRANSCRIPT_PART_LEN, TranscriptAnswer,
+    TranscriptRequest, Uncommitted, Work, WorkAt, query_initiate, query_initiate_within,
+    query_respond, query_respond_within, read_query,
 };
 use wf_store::{RedbStore, Replica};
 
@@ -57,6 +58,9 @@ fn work(head: CommitId) -> Work {
 struct AgentRepository {
     work: Option<Work>,
     snapshots: Vec<(CommentSnapshot, Work)>,
+    /// What each snapshot of a session changed against the one before, by session, the one
+    /// before and the snapshot.
+    changes: Vec<((SessionId, GitOid, GitOid), String)>,
     transcripts: HashMap<SessionId, (Vec<u8>, bool)>,
 }
 
@@ -100,6 +104,15 @@ impl QuerySource for AgentRepository {
         let answer = match self.snapshots.iter().find(|(taken, _)| *taken == at) {
             None => DiffAnswer::NotHere,
             Some((_, work)) => DiffAnswer::Work(work.clone()),
+        };
+        Box::pin(async move { Ok(answer) })
+    }
+
+    fn changes(&self, request: ChangesRequest) -> BoxFuture<Result<ChangesAnswer, SourceError>> {
+        let asked = (request.session, request.against, request.snapshot);
+        let answer = match self.changes.iter().find(|(recorded, _)| *recorded == asked) {
+            None => ChangesAnswer::NotHere,
+            Some((_, diff)) => ChangesAnswer::Changes(diff.clone()),
         };
         Box::pin(async move { Ok(answer) })
     }
@@ -258,6 +271,40 @@ async fn the_work_at_a_snapshot_above_the_largest_answer_is_too_large() {
         ask_snapshot(&source, taken_at(1)).await,
         DiffAnswer::TooLarge
     );
+}
+
+fn changes_of(against: u8, snapshot: u8) -> ChangesRequest {
+    ChangesRequest {
+        workforce: Fixture::new(1).workforce(),
+        item: item(),
+        session: session(1),
+        against: tree(against),
+        snapshot: tree(snapshot),
+    }
+}
+
+#[tokio::test]
+async fn what_a_snapshot_changed_is_answered_and_one_not_recorded_is_not_here() {
+    let diff = "diff --git a/notes.md b/notes.md\n@@ -1 +1 @@\n-one\n+two\n".to_string();
+    let source = AgentRepository {
+        changes: vec![((session(1), tree(1), tree(2)), diff.clone())],
+        ..AgentRepository::default()
+    };
+    assert_eq!(
+        ask(&source, changes_of(1, 2)).await,
+        ChangesAnswer::Changes(diff)
+    );
+    for missing in [changes_of(2, 1), changes_of(3, 2)] {
+        assert_eq!(ask(&source, missing).await, ChangesAnswer::NotHere);
+    }
+    let huge = AgentRepository {
+        changes: vec![(
+            (session(1), tree(1), tree(2)),
+            "x".repeat(MAX_FRAME_LEN as usize + 1),
+        )],
+        ..AgentRepository::default()
+    };
+    assert_eq!(ask(&huge, changes_of(1, 2)).await, ChangesAnswer::TooLarge);
 }
 
 #[tokio::test]

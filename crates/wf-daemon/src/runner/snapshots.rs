@@ -105,6 +105,19 @@ pub(crate) fn find_snapshot(transcript: &str, at: CommentSnapshot) -> Option<Rec
     }
 }
 
+/// Whether `transcript`, the lines of the transcript of a session, records the snapshot `tree`
+/// with what it changed against `against`.
+pub(crate) fn records_changes(transcript: &str, against: GitOid, tree: GitOid) -> bool {
+    transcript
+        .lines()
+        .filter_map(|line| serde_json::from_str::<TranscriptEntry>(line).ok())
+        .filter(|entry| recorded(entry).is_some_and(|snapshot| snapshot.tree == tree))
+        .any(|entry| {
+            serde_json::from_value::<SnapshotChanges>(entry.message["changes"].clone())
+                .is_ok_and(|changes| changes.against == against)
+        })
+}
+
 /// The snapshot `entry` records, when it is a snapshot entry.
 fn recorded(entry: &TranscriptEntry) -> Option<RecordedSnapshot> {
     match entry.direction {

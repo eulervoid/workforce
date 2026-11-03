@@ -281,6 +281,25 @@ impl DaemonClient {
         self.call(workforce, Call::SnapshotDiff { item, at })
     }
 
+    /// What a snapshot of a session changed against `against`, the one before it, as the device of
+    /// the session has it.
+    pub fn snapshot_changes(
+        &mut self,
+        workforce: WorkforceId,
+        item: ItemId,
+        session: wf_core::id::SessionId,
+        against: wf_core::session::GitOid,
+        snapshot: wf_core::session::GitOid,
+    ) -> Result<crate::proto::ChangesDiff, ClientError> {
+        let call = Call::SnapshotChanges {
+            item,
+            session,
+            against,
+            snapshot,
+        };
+        self.call(workforce, call)
+    }
+
     /// Follows the transcript of a session of another device for some seconds more: what its
     /// copy came to so far.
     pub fn follow_transcript(

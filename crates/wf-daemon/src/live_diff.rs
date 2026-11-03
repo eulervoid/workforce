@@ -1,7 +1,7 @@
 //! The live diff of an item: what its work session on some device has changed so far, and what it
 //! had changed at the snapshot a comment shows.
 //!
-//! The device of the session answers from its own repositories over `wf/query/2`, and a device that
+//! The device of the session answers from its own repositories over `wf/query/3`, and a device that
 //! asks for it dials that one, so the answer is the diff as the session's device shows it, against
 //! the target it has. What is not committed is read only from the snapshots of the session
 //! (SPEC §10), never by running git with the agent repository's `.git`.
@@ -11,11 +11,11 @@ use std::path::PathBuf;
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::session::{CommentSnapshot, SessionRole};
 use wf_core::state::State;
-use wf_net::{DiffAnswer, Uncommitted, Work, WorkAt};
+use wf_net::{ChangesAnswer, ChangesRequest, DiffAnswer, Uncommitted, Work, WorkAt};
 use wf_vcs::{GitCli, VcsError, item_repository};
 
-use crate::proto::{LiveDiff, SnapshotDiff};
-use crate::runner::snapshots::find_snapshot;
+use crate::proto::{ChangesDiff, LiveDiff, SnapshotDiff};
+use crate::runner::snapshots::{find_snapshot, records_changes};
 use crate::{Daemon, StorageClosed};
 
 #[derive(Debug, thiserror::Error)]
@@ -113,6 +113,93 @@ impl Daemon {
         })
         .await
         .map_err(LiveDiffError::Task)?
+    }
+
+    /// What the snapshot of `request` changed against the one before it, for a session of this
+    /// device: [`ChangesAnswer::NotHere`] when the session is not one of this device on the item,
+    /// or its transcript does not record the snapshot with what it changed against that one.
+    pub(crate) async fn changes_here(
+        &self,
+        request: ChangesRequest,
+    ) -> Result<ChangesAnswer, LiveDiffError> {
+        let ChangesRequest {
+            workforce,
+            item,
+            session,
+            against,
+            snapshot,
+        } = request;
+        let loaded = self
+            .loaded_workforce(&workforce)
+            .ok_or(LiveDiffError::NotLoaded(workforce))?;
+        let here = self.device();
+        let ours = loaded
+            .storage
+            .with(move |replica| {
+                replica
+                    .state()
+                    .session(session)
+                    .is_some_and(|session| session.device() == here && session.item() == item)
+            })
+            .await?;
+        if !ours {
+            return Ok(ChangesAnswer::NotHere);
+        }
+        let workforce_directory = self.workforce_directory(workforce);
+        let transcript = self.launch.data_dir.transcript(&workforce, session);
+        tokio::task::spawn_blocking(move || {
+            let transcript = match std::fs::read_to_string(&transcript) {
+                Ok(transcript) => transcript,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(ChangesAnswer::NotHere);
+                }
+                Err(error) => return Err(LiveDiffError::Transcript(error)),
+            };
+            if !records_changes(&transcript, against, snapshot) {
+                return Ok(ChangesAnswer::NotHere);
+            }
+            let diff = wf_vcs::snapshot_changes(&workforce_directory, item, against, snapshot)?;
+            Ok(ChangesAnswer::Changes(diff))
+        })
+        .await
+        .map_err(LiveDiffError::Task)?
+    }
+
+    /// What the snapshot of `request` changed against the one before it, from the device of its
+    /// session: here without the network when the session ran here.
+    pub(crate) async fn snapshot_changes(
+        &self,
+        request: ChangesRequest,
+    ) -> Result<ChangesDiff, LiveDiffError> {
+        let loaded = self
+            .loaded_workforce(&request.workforce)
+            .ok_or(LiveDiffError::NotLoaded(request.workforce))?;
+        let session = request.session;
+        let device = loaded
+            .storage
+            .with(move |replica| {
+                replica
+                    .state()
+                    .session(session)
+                    .map(|session| session.device())
+            })
+            .await?
+            .ok_or(LiveDiffError::UnknownSession(session))?;
+        if device == self.device() {
+            return Ok(ChangesDiff::Answer(self.changes_here(request).await?));
+        }
+        let asked = async {
+            let node = self.node().await?;
+            node.query_changes(wf_net::endpoint_id(device), request)
+                .await
+        };
+        Ok(match asked.await {
+            Ok(answer) => ChangesDiff::Answer(answer),
+            Err(error) => ChangesDiff::Unreachable {
+                device,
+                reason: wf_core::error_chain(&error),
+            },
+        })
     }
 
     /// The live diff of `item`, from the device of its live work session: here without the
