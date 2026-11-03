@@ -1100,24 +1100,35 @@ fn recorded_snapshots(world: &World) -> Vec<Value> {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_transcript_records_a_snapshot_at_the_end_of_each_block_of_tool_calls_that_changed_the_files()
  {
-    // The agent goes on once the snapshot of its first block is recorded, as an agent that thinks
-    // before its next call; the second block ends right before the turn.
-    let script = "\
+    // The agent goes on once the snapshot of a block is recorded, as an agent that writes on for a
+    // while after its calls.
+    let blocks = |count: usize| {
+        format!(
+            "sh until [ $(cat \"$WF_DATA_DIR\"/*/transcripts/*.jsonl | grep -c '\"at\":\"block\"') -ge {count} ]; do sleep 0.05; done"
+        )
+    };
+    let script = format!(
+        "\
 sh echo one > notes.txt && echo kept > kept.txt && git add . && git commit -q -m notes
 tool Run sed
 sh sed -i.bak s/one/two/ notes.txt && rm notes.txt.bak
 say Changed it.
-sh until grep -qs '\"at\":\"block\"' \"$WF_DATA_DIR\"/*/transcripts/*.jsonl; do sleep 0.05; done
+{}
 say Still the same message.
 tool Read notes.txt
 say Read it.
 tool Run rm
 sh rm notes.txt
 say Removed it.
+{}
+say That is all.
 turn
 wf work release --note \"stopping\"
-";
-    let world = World::new(script).await;
+",
+        blocks(1),
+        blocks(2)
+    );
+    let world = World::new(&script).await;
     let item = world.wf.add(&["--title", "Edit through the shell"]);
     start_session(&world, &item);
     world.ended_session().await;
@@ -1167,6 +1178,21 @@ wf work release --note \"stopping\"
             "files": [{"path": "notes.txt", "change": "deleted", "added": 0, "removed": 1}],
         })
     );
+    let watched = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    let changed = |files: &str| {
+        watched
+            .find(files)
+            .unwrap_or_else(|| panic!("{files} in {watched}"))
+    };
+    assert!(
+        changed("2 files changed") < changed("Changed it.")
+            && changed("Changed it.") < changed("1 file changed")
+            && changed("1 file changed") < changed("Removed it."),
+        "each block's files before the text after it: {watched}"
+    );
+    assert!(watched.contains("notes.txt (deleted)"), "{watched}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

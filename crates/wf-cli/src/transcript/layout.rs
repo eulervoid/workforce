@@ -6,6 +6,7 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
 use similar::TextDiff;
+use wf_core::session::{ChangedFile, FileChange};
 use wf_harness::{Decider, Decision, Permission};
 
 use super::{
@@ -79,7 +80,8 @@ impl Block {
     pub fn opens(&self) -> Spacing {
         match self {
             Block::Prose { .. } => Spacing::Prose,
-            Block::Call { .. } => Spacing::Tool,
+            // Right under the calls whose changes they are.
+            Block::Call { .. } | Block::Changes { .. } => Spacing::Tool,
             Block::Log(_) => Spacing::Log,
             Block::Prompt { .. }
             | Block::Answer { .. }
@@ -99,14 +101,17 @@ impl Block {
             | Block::Log(_)
             | Block::Plan(_)
             | Block::Error { .. }
-            | Block::Footer { .. } => self.opens(),
+            | Block::Footer { .. }
+            | Block::Changes { .. } => self.opens(),
         }
     }
 
     /// Whether the block may show less abridged than in full.
     pub fn can_abridge(&self) -> bool {
         match self {
-            Block::Prompt { .. } | Block::Call { .. } | Block::Log(_) => true,
+            Block::Prompt { .. } | Block::Call { .. } | Block::Log(_) | Block::Changes { .. } => {
+                true
+            }
             Block::Answer { .. }
             | Block::Prose { .. }
             | Block::Plan(_)
@@ -169,6 +174,7 @@ impl Layout {
             Block::Plan(entries) => self.plan(entries),
             Block::Error { message, elapsed } => self.error(message, *elapsed),
             Block::Footer { reason, elapsed } => self.footer(reason, *elapsed),
+            Block::Changes { files, .. } => self.changes(files),
         }
     }
 
@@ -444,6 +450,70 @@ impl Layout {
             display_width(text),
             &elapsed,
             theme::text_dimmed(),
+        )
+    }
+
+    /// `3 files changed`, then a line for each, folded to its header as in the diff; the first
+    /// and last of many unless `--full`.
+    fn changes(&self, files: &[ChangedFile]) -> String {
+        let mut out = self.changes_title(files);
+        let lines = files.iter().map(|file| self.changed_file(file)).collect();
+        for line in self.abridged(lines) {
+            match line {
+                Line::Text(text) => out.push_str(&text),
+                Line::Hidden(count) => {
+                    let text = format!("… {count} files hidden");
+                    out.push_str(&format!(
+                        "{}{}\n",
+                        " ".repeat(NESTED),
+                        self.styled(&text, theme::text_dimmed())
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    fn changes_title(&self, files: &[ChangedFile]) -> String {
+        let title = match files.len() {
+            1 => "1 file changed".to_owned(),
+            count => format!("{count} files changed"),
+        };
+        format!(
+            "{}{}\n",
+            " ".repeat(MARGIN),
+            self.styled(&title, theme::text_dimmed())
+        )
+    }
+
+    /// `src/lib.rs (new)  +12 −3` under the title, with its newline.
+    fn changed_file(&self, file: &ChangedFile) -> String {
+        let what = match &file.change {
+            FileChange::Added => " (new)".to_owned(),
+            FileChange::Deleted => " (deleted)".to_owned(),
+            FileChange::Modified => String::new(),
+            FileChange::Renamed { from } => format!(" (from {from})"),
+        };
+        let (added, removed) = (format!("+{}", file.added), format!("−{}", file.removed));
+        let counts_width = display_width(&added) + 1 + display_width(&removed);
+        let room = self.width.saturating_sub(NESTED + counts_width + 2);
+        let path = cut(
+            &file.path,
+            room.saturating_sub(display_width(&what)).max(10),
+        );
+        let left = format!(
+            "{}{}{}",
+            " ".repeat(NESTED),
+            self.styled(&path, theme::text_bold()),
+            self.styled(&what, theme::text_dimmed())
+        );
+        let left_width = NESTED + display_width(&path) + display_width(&what);
+        let padding = self.width.saturating_sub(left_width + counts_width).max(2);
+        format!(
+            "{left}{}{} {}\n",
+            " ".repeat(padding),
+            self.styled(&added, theme::diff_added()),
+            self.styled(&removed, theme::diff_removed())
         )
     }
 
