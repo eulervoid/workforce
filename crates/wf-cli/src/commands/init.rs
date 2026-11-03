@@ -5,11 +5,12 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use serde::Serialize;
 use wf_core::autonomy::Autonomy;
-use wf_core::event::{AgentDefined, EventBody, Genesis};
-use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
+use wf_core::event::{AgentDefined, DeviceProfile, Genesis};
+use wf_core::identity::{DeviceSigner, MemberSeed, PrincipalSigner, Signed};
 use wf_core::name::{Handle, LaneName};
-use wf_core::policy::DEFAULT_POLICY_TOML;
-use wf_store::{RedbStore, Replica};
+use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
+use wf_daemon::client::DaemonClient;
+use wf_daemon::founding::Founding;
 
 use super::{emit, handle_from_environment};
 use crate::cli::*;
@@ -17,6 +18,13 @@ use crate::harness;
 use crate::interactive::{self, Mode};
 use crate::workspace::{self, WORKFORCE_FILE, WorkforceFile};
 use wf_daemon::DataDir;
+
+/// Who founds the workforce as this machine's device.
+enum Founder {
+    Daemon(DaemonClient),
+    /// No daemon runs, so this process signs with the device key.
+    Cli(DeviceSigner),
+}
 
 #[derive(Serialize)]
 struct InitView {
@@ -43,7 +51,6 @@ pub(super) fn init(
     if workspace::find_workforce(cwd).is_ok() {
         bail!("this directory already belongs to a workforce ({WORKFORCE_FILE})");
     }
-    data.require_no_daemon("creating a workforce")?;
     let path = std::env::var_os("PATH").unwrap_or_default();
     let harnesses = harness::detect(&path);
     let (name, setups) = match (args.interactive, mode) {
@@ -62,66 +69,46 @@ pub(super) fn init(
         None => handle_from_environment(),
     };
     let principal = PrincipalSigner::generate(rand::random());
-    let device = data.device_or_create()?;
+    // A daemon on this machine owns the device key and the stores: it founds the workforce.
+    let founder = match data.connect_daemon()? {
+        Some(client) => Founder::Daemon(client),
+        None => Founder::Cli(data.device_or_create()?),
+    };
+    let device = match &founder {
+        Founder::Daemon(client) => client.device(),
+        Founder::Cli(signer) => signer.key(),
+    };
 
     let genesis = Genesis {
         name: name.clone(),
         founder: MemberSeed {
             principal: principal.key(),
             handle: handle.clone(),
-            devices: vec![device.key()],
+            devices: vec![device],
             previous: Vec::new(),
         },
         members: Vec::new(),
         policy: DEFAULT_POLICY_TOML.to_string(),
         forked_from: None,
     };
-    let body = EventBody::Genesis(Signed::sign(&principal, None, genesis)?);
-    let actor = Actor::Principal(principal.key());
-    let genesis_event =
-        wf_core::event::EventBuilder::genesis(device.key(), actor.clone(), wf_store::now_ms())
-            .sign(&device, body)?;
-    let id: wf_core::id::WorkforceId = genesis_event.id().into();
-
-    data.store_principal(&id, &principal)?;
-    let mut replica = Replica::open(RedbStore::open(workspace::store_path(&data, &id)?)?, id)?;
-    if replica.state().workforce_id().is_some() {
-        bail!("a local log for workforce {id} already exists");
-    }
-    replica.receive(genesis_event)?;
-
-    replica.author(
-        &device,
-        actor.clone(),
-        wf_store::now_ms(),
-        EventBody::DeviceProfile(wf_core::event::DeviceProfile {
-            name: args.device_name.unwrap_or_else(crate::network::host_name),
-            hardware: crate::network::detect_hardware(),
-            agents: Default::default(),
-            max_sessions: 1,
-        }),
-    )?;
+    let target = Policy::parse(&genesis.policy)?.merge.target;
 
     let mut agents = Vec::new();
+    let mut defined = Vec::new();
     for setup in setups {
         let autonomy = Autonomy {
             permissions: setup.permissions,
             ..Autonomy::default()
         };
-        replica.author(
-            &device,
-            actor.clone(),
-            wf_store::now_ms(),
-            EventBody::AgentDefined(AgentDefined {
-                name: setup.name.clone(),
-                harness: setup.harness.clone(),
-                model: setup.model.clone(),
-                instructions: None,
-                capabilities: Vec::new(),
-                lanes: vec![LaneName::new("default")?],
-                autonomy,
-            }),
-        )?;
+        defined.push(AgentDefined {
+            name: setup.name.clone(),
+            harness: setup.harness.clone(),
+            model: setup.model.clone(),
+            instructions: None,
+            capabilities: Vec::new(),
+            lanes: vec![LaneName::new("default")?],
+            autonomy,
+        });
         let model = setup.model.as_deref().unwrap_or("its default model");
         agents.push(format!(
             "@{handle}/{} ({}, {model}, permissions {})",
@@ -129,22 +116,35 @@ pub(super) fn init(
         ));
     }
 
-    let target = replica
-        .state()
-        .policy()
-        .expect("a workforce has a policy")
-        .policy
-        .merge
-        .target
-        .clone();
     let checkout = match wf_vcs::GitCli::checkout_root(cwd) {
         Ok(root) => Some(root),
         Err(wf_vcs::VcsError::NotARepository(_)) => None,
         Err(error) => return Err(error.into()),
     };
-    let bare = wf_vcs::bare_repository(&data.workforce(&id));
-    wf_vcs::GitCli::create_bare_repository(&bare, &target, checkout.as_deref())?;
-    let upstream = checkout.map(|_| format!("{}/{target}", wf_vcs::REMOTE));
+    let upstream = checkout
+        .as_ref()
+        .map(|_| format!("{}/{target}", wf_vcs::REMOTE));
+    let founding = Founding {
+        genesis: Signed::sign(&principal, None, genesis)?,
+        profile: DeviceProfile {
+            name: args.device_name.unwrap_or_else(crate::network::host_name),
+            hardware: crate::network::detect_hardware(),
+            agents: Default::default(),
+            max_sessions: 1,
+        },
+        agents: defined,
+        checkout,
+    };
+    let id = match founder {
+        Founder::Daemon(mut client) => client.found(founding)?,
+        Founder::Cli(device) => {
+            let founding = founding.sign(&device, wf_store::now_ms())?;
+            let id = founding.workforce();
+            founding.create(&data, &device)?;
+            id
+        }
+    };
+    data.store_principal(&id, &principal)?;
 
     let file = toml::to_string(&WorkforceFile { id })?;
     std::fs::write(cwd.join(WORKFORCE_FILE), file)?;

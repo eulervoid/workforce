@@ -11,6 +11,7 @@ pub mod data_dir;
 pub mod decide;
 mod environment;
 mod faults;
+pub mod founding;
 mod git_service;
 mod inherit;
 mod judges;
@@ -90,6 +91,8 @@ pub enum DaemonError {
     Fork(#[from] ForkError),
     #[error(transparent)]
     StorageClosed(#[from] StorageClosed),
+    #[error(transparent)]
+    Founding(#[from] founding::FoundingError),
     #[error("could not reach a device to join through: {0}")]
     JoinUnreachable(String),
     #[error("{path}: {source}")]
@@ -721,6 +724,40 @@ impl Daemon {
         }
         self.workforce(child).await?;
         Ok(())
+    }
+
+    /// Founds the workforce of `founding` as this daemon's device and starts serving it at once,
+    /// so it does not wait for the next rescan to find it.
+    pub(crate) async fn found(
+        self: &Arc<Self>,
+        founding: founding::Founding,
+    ) -> Result<WorkforceId, DaemonError> {
+        let founding = founding
+            .sign(&self.device, wf_store::now_ms())
+            .map_err(founding::FoundingError::from)?;
+        let id = founding.workforce();
+        // A task of its own, like the open in `workforce`, so it finishes whatever the caller does.
+        let daemon = Arc::clone(self);
+        crate::spawn(async move {
+            // Held while the store is written, so a rescan that finds it waits to open it.
+            let _opening = daemon.opening.lock(id).await;
+            let data_dir = daemon.launch.data_dir.clone();
+            let device = daemon.device.clone();
+            tokio::task::spawn_blocking(move || founding.create(&data_dir, &device))
+                .await
+                .map_err(|error| DaemonError::Io {
+                    path: daemon.launch.data_dir.workforce(&id),
+                    source: std::io::Error::other(error),
+                })??;
+            Ok::<_, DaemonError>(())
+        })
+        .await
+        .map_err(|error| DaemonError::Io {
+            path: self.launch.data_dir.workforce(&id),
+            source: std::io::Error::other(error),
+        })??;
+        self.workforce(id).await?;
+        Ok(id)
     }
 
     /// Joins the workforce of `code` with this daemon's device key, through the first of the

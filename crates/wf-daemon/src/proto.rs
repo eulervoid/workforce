@@ -24,8 +24,9 @@ use wf_net::DiffAnswer;
 use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
+use crate::founding::Founding;
 
-pub const PROTOCOL_VERSION: u32 = 29;
+pub const PROTOCOL_VERSION: u32 = 30;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -76,9 +77,12 @@ pub enum HelloReply {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Request {
-    pub workforce: WorkforceId,
-    pub call: Call,
+pub enum Request {
+    /// A call in `workforce`, which this machine has or is about to join or follow.
+    Workforce { workforce: WorkforceId, call: Call },
+    /// Founds a new workforce, whose id the daemon's device signature fixes, and starts serving
+    /// it; answered with its `WorkforceId`. For the principal only.
+    Found(Box<Founding>),
 }
 
 /// Each call is answered with a [`Reply`] of the type its documentation names.
@@ -431,7 +435,7 @@ mod tests {
             Call::Fork(Box::new(fork)),
             Call::Join {
                 code: "wfi1abc".into(),
-                profile,
+                profile: profile.clone(),
             },
             Call::Follow(vec![device]),
             Call::Presence,
@@ -475,14 +479,38 @@ mod tests {
             CALL_VARIANTS,
             "two requests are for the same call"
         );
-        let hashes: Vec<(&str, usize, String)> = calls
+        let founder = PrincipalSigner::generate([9; 32]);
+        let genesis = wf_core::event::Genesis {
+            name: "acme".into(),
+            founder: wf_core::identity::MemberSeed {
+                principal: founder.key(),
+                handle: wf_core::name::Handle::new("ada").unwrap(),
+                devices: vec![device],
+                previous: Vec::new(),
+            },
+            members: Vec::new(),
+            policy: wf_core::policy::DEFAULT_POLICY_TOML.into(),
+            forked_from: None,
+        };
+        let found = Request::Found(Box::new(Founding {
+            genesis: wf_core::identity::Signed::sign(&founder, None, genesis).unwrap(),
+            profile,
+            agents: Vec::new(),
+            checkout: Some("/home/ada/acme".into()),
+        }));
+        let requests = calls
             .into_iter()
             .map(|call| {
                 let name = golden_name(&call);
-                let request = Request {
+                let request = Request::Workforce {
                     workforce: fixture.workforce(),
                     call,
                 };
+                (name, request)
+            })
+            .chain([("Found", found)]);
+        let hashes: Vec<(&str, usize, String)> = requests
+            .map(|(name, request)| {
                 let bytes = encoding::encode(&request).unwrap();
                 (name, bytes.len(), EventId::of(&bytes).to_string())
             })
@@ -499,120 +527,125 @@ mod tests {
         );
     }
 
-    const GOLDEN_REQUESTS: [(&str, usize, &str); 22] = [
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 23] = [
         (
             "State",
-            34,
-            "wlcqcya4cz77onxsm2ty23q6qs7abd5vrasr4eu5sa27kl5qkudq",
+            35,
+            "pslippkuiloncv52ca5pawh5i26f7li2aw5joxmf7iwqpzgs5ubq",
         ),
         (
             "Event",
-            67,
-            "jppshzhqtwrgejqbqfoqjw6trmf42u7f6bswqcumlrnxhkqlao6a",
+            68,
+            "7j7m3a6m7yb7jqjux7tyjdyz2bfsp2vyhb33oibqccc7k4xiiy2q",
         ),
         (
             "Events",
-            35,
-            "mv2566yqasmrhpz5narw7miji5at5ndtjzcoxcy4xgjlfap7ekwq",
+            36,
+            "dubnocuzzx4mk4gcrzi2ve5qfiod5gavzzu7lgrbrmhuwc64df5a",
         ),
         (
             "ItemEvents",
-            68,
-            "tqilx2bha7nv7rptyhwenawgx2e537lmj2ueqssyg43c5cpnovza",
+            69,
+            "3yxdo5elcgfne76c5gsow5v6wttthyqsvzsnjabv2hedqx3z4wgq",
         ),
         (
             "AgentEvents",
-            74,
-            "pon2lzcp5kfddvm2nemqeyus74qv6tchlj7pucjd4cn24lyekgrq",
+            75,
+            "k73srphohfgkn3coybn46huqkj6k34r3bal2hhflhawjjgjym3yq",
         ),
         (
             "Author",
-            78,
-            "nazduy7tjhgg4w7nvjxf7pcekn2nav3v3wg2cwwn3vkmcxcbd6wa",
+            79,
+            "2hqtkt37zdzvxwfusyxwlq4ulf7s5bfcgrvlo3ku6mybrbpklylq",
         ),
         (
             "SyncNow",
-            34,
-            "phiajiqxzhhdn5sbbjlnfpord5zqksbm6qzfxwwbwp665gwizrkq",
+            35,
+            "v2c2ljitelvjqkcw47yfixjooeqp5baatyurnb7um2fspevnt4cq",
         ),
         (
             "Fork",
-            2114,
-            "zyzwhu5evwv3awrg34o5cnxzprfn7yz26l4z44ek4yrzce4l2gza",
+            2115,
+            "4rondffld2gke65nkhammxttmu3wnaag3ihhwkvpnlbkgp4mevdq",
         ),
         (
             "Join",
-            73,
-            "hmpjtxgomgougtzfyrz4lch24bpcsvf6cbz3rhoyaradvnbe3vqa",
+            74,
+            "p7jfg7barjad3slulio3j5mxrxfuwqrpfyrpdwniwqnzluzo3eia",
         ),
         (
             "Follow",
-            68,
-            "rx2m5tktl37vhxtq435wtpoks53qq6h6367znkwedismbv357s3a",
+            69,
+            "lqnftplht35gavadilvpwv7rjh3woxmuu2xagyn4w3ctey3y4hea",
         ),
         (
             "Presence",
-            34,
-            "4mq2af3in4w45kxs5lynopyub2zd5d67ki2rdp4pnbiikbcsts4q",
+            35,
+            "6wnpe5gps7gk5vos3v7ot7nwyfe4hwrhgxo7xmsa3emxatwtc63a",
         ),
         (
             "StartSession",
-            75,
-            "dsyndcl62ww6imchxbt4vm57p6u7srfa5zthvvizxgejdfngeeua",
+            76,
+            "glkm4agx6qqpwklw4zg5lefqrmllb4zjmb3xktmq5ld4l6x2p6ja",
         ),
         (
             "EndSession",
-            41,
-            "ymfkpzv322maxh363b3zkmvreqwarktp53eu3jvhrxoqdn4p3xfq",
+            42,
+            "oq6f6v5kubjtw7tspm3bzplynxpiahcbpavoomnupo5gld7bmlla",
         ),
         (
             "StopSession",
-            67,
-            "kylbvrf3xxzrz7tqhbycri37xjrnophq66h2bgn3krwyt7cv4jdq",
+            68,
+            "ytaxsrugkfyo3gmkd7iak6znjvkcuyn2rx4eeoeodpwvb6he3mrq",
         ),
         (
             "Permissions",
-            34,
-            "navv27nk5bvp6gepqrhuror4qgacq6n4vjsi7fov2gtcwoho5tfq",
+            35,
+            "lcwx6bod2yh3rwqlzaqfkxbvu5ceebzakakdiitdtl27bvkdi72q",
         ),
         (
             "AnswerPermission",
-            70,
-            "hcrsrbdvffj7eanzmjxlyda5zjzurcesx37z7hkehwa7i4ank33a",
+            71,
+            "sinp2sro7axzwhthtwip5mveaeqvck6reosac7fcpyh3z2hml7qa",
         ),
         (
             "MachineFaults",
-            34,
-            "pzxatnxseofmpzsbqwsgobae6hawls2z7msngapqltnssqqvej6q",
+            35,
+            "rde2dbs4oykvuf7pkgvdgldhz5nzexm7komnzbpncpohf4colvya",
         ),
         (
             "CacheUsage",
-            34,
-            "5o3mf5ues7mpfqt5j3lbf6tubhtpj7jhxwgcv3l5lxz2kddddroa",
+            35,
+            "dtdqn5qcton4d32v4q64nklxw4qhxorg543etm777dboy26vikwa",
         ),
         (
             "LiveDiff",
-            90,
-            "zsbfpyhdo6zlhdkua7rtzzkudwywcfix2p2djuh273agyoym6wtq",
+            91,
+            "jmzajanqeh27qotsb7udp2bzorfkm65yysvld2cnyy57cjprq35a",
         ),
         (
             "TargetCommit",
-            34,
-            "un2bxeyghqbtsivctofjomzcjmtvvvkngu4i32d53to66jhekr3a",
+            35,
+            "luwmxbxdflupedlbnwiuwqemneykdjdxmvj3vamvihsavoz7fhua",
         ),
         (
             "AwaitedCommits",
-            34,
-            "hncxj5p5snds65sswv2u5xg4fhasm77v3gh3dovgys5cliwo5k3q",
+            35,
+            "ebl37w4odxja5pqu7px6r4gsc2ltzjorcn5mka7d6mulbpubyd6a",
         ),
         (
             "FollowTranscript",
-            67,
-            "wbybn6jv5or5yd46o4gbkyffs7zptog7pw6hfzgn4fip5ylhzajq",
+            68,
+            "4ewoqlqx6hmqqilec5h5x6pbo5m5dx6sginkfslv2d3fvgdzizva",
+        ),
+        (
+            "Found",
+            1773,
+            "ihsn5ybw6tf7wxfz6dsdvku4woizasnstbxkmep6qbswoigxryvq",
         ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 29;
+    const GOLDEN_PROTOCOL_VERSION: u32 = 30;
     const GOLDEN_REPLIES: [(&str, usize, &str); 9] = [
         (
             "State",

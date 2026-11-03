@@ -947,14 +947,34 @@ fn the_daemon_starts_in_the_background_and_stops() {
 
     let elsewhere = sandbox.root.path().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
-    let init = common::output(
-        sandbox
-            .command(&["init", "--name", "second"])
-            .current_dir(&elsewhere),
-    );
-    assert!(!init.status.success());
-    let error = String::from_utf8_lossy(&init.stderr);
-    assert!(error.contains("wf daemon stop"), "{error}");
+    // The daemon founds a workforce while it runs, and serves it at once.
+    let in_elsewhere = |args: &[&str]| {
+        let output = common::output(sandbox.command(args).current_dir(&elsewhere));
+        assert!(
+            output.status.success(),
+            "wf {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        value["data"].clone()
+    };
+    let second = in_elsewhere(&["init", "--name", "second", "--json"]);
+    assert_eq!(second["name"], "second");
+    in_elsewhere(&[
+        "item",
+        "add",
+        "--title",
+        "In the second workforce",
+        "--json",
+    ]);
+    let items = in_elsewhere(&["item", "list", "--json"]);
+    let titles: Vec<_> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["In the second workforce"]);
     let error = sandbox.fail(&["status", "--refold"]);
     assert!(error.contains("wf daemon stop"), "{error}");
 

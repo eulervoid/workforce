@@ -85,15 +85,40 @@ fn reply<T: Serialize>(value: T) -> Result<Vec<u8>, String> {
 
 /// The encoded [`Reply`] to a request.
 async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u8> {
-    if let Err(message) = permit(caller, request.workforce, &request.call) {
+    match request {
+        Request::Workforce { workforce, call } => {
+            answer_call(daemon, caller, workforce, call).await
+        }
+        Request::Found(founding) => {
+            if let Caller::Session { .. } = caller {
+                return encode_failed(
+                    "only the principal can found a workforce, not a session".to_string(),
+                );
+            }
+            match daemon.found(*founding).await {
+                Ok(id) => reply(id).unwrap_or_else(encode_failed),
+                Err(error) => encode_failed(wf_core::error_chain(&error)),
+            }
+        }
+    }
+}
+
+/// The encoded [`Reply`] to `call` in `workforce`.
+async fn answer_call(
+    daemon: &Arc<Daemon>,
+    caller: Caller,
+    workforce: WorkforceId,
+    call: Call,
+) -> Vec<u8> {
+    if let Err(message) = permit(caller, workforce, &call) {
         return encode_failed(message);
     }
-    let opened = match request.call {
-        Call::Join { ref code, .. } => match check_invite(code, request.workforce) {
-            Ok(_) => daemon.follow(request.workforce).await,
+    let opened = match call {
+        Call::Join { ref code, .. } => match check_invite(code, workforce) {
+            Ok(_) => daemon.follow(workforce).await,
             Err(message) => return encode_failed(message),
         },
-        Call::Follow(_) => daemon.follow(request.workforce).await,
+        Call::Follow(_) => daemon.follow(workforce).await,
         Call::State
         | Call::Event(_)
         | Call::Events { .. }
@@ -113,13 +138,13 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::LiveDiff { .. }
         | Call::TargetCommit
         | Call::AwaitedCommits
-        | Call::FollowTranscript(_) => daemon.workforce(request.workforce).await,
+        | Call::FollowTranscript(_) => daemon.workforce(workforce).await,
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
         Err(error) => return encode_failed(wf_core::error_chain(&error)),
     };
-    match call(daemon, caller, request.workforce, &loaded, request.call).await {
+    match self::call(daemon, caller, workforce, &loaded, call).await {
         Ok(reply) => reply,
         Err(message) => encode_failed(message),
     }
