@@ -391,6 +391,49 @@ async fn a_prompt_is_accepted_once_the_agent_takes_it_up() {
     assert_eq!(accepted("say on it\nsilent").await, 1);
 }
 
+#[tokio::test]
+async fn a_block_of_tool_calls_ends_with_the_text_after_it_or_after_fifty_calls() {
+    // How many blocks of tool calls ended in a turn of an agent that follows `script`.
+    async fn blocks(script: &str) -> u64 {
+        let directory = tempfile::tempdir().unwrap();
+        let mut conversation = Conversation::start(Launch {
+            agent: scripted_agent(&directory, script),
+            opening: Opening::New,
+            model: None,
+            directory: directory.path().to_path_buf(),
+            permissions: Arc::new(Permission::Allow),
+            transcript: SharedBuffer::default(),
+            silence_limit: SILENCE_LIMIT,
+        })
+        .await
+        .unwrap();
+        let blocks = conversation.blocks();
+        conversation.reply("hello").await.unwrap();
+        conversation.close().await.unwrap();
+        *blocks.borrow()
+    }
+    assert_eq!(blocks("say thinking\nsay still thinking").await, 0);
+    assert_eq!(
+        blocks("tool Read\nsay read it\nsay more\ntool Edit\ntool Run\nsay done").await,
+        2,
+        "text ends a block once, however many chunks follow"
+    );
+    assert_eq!(
+        blocks("say start\ntool Run").await,
+        0,
+        "the end of the turn is no block"
+    );
+    let calls = |count| "tool Run\n".repeat(count);
+    let fifty = usize::try_from(wf_harness::BLOCK_CALLS).unwrap();
+    assert_eq!(blocks(&calls(fifty - 1)).await, 0);
+    assert_eq!(blocks(&calls(fifty)).await, 1);
+    assert_eq!(
+        blocks(&format!("{}say done", calls(fifty + 1))).await,
+        2,
+        "the call after the fiftieth starts a block of its own"
+    );
+}
+
 /// The fake agent, following `script` instead of its default, which is kept in `directory`.
 fn scripted_agent(
     directory: &tempfile::TempDir,

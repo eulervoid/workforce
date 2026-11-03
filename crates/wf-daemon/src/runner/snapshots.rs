@@ -18,13 +18,16 @@ use crate::{Daemon, Loaded};
 /// Where in a work session a snapshot is taken.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum SnapshotPoint {
+    /// When a block of tool calls ended: the agent wrote text again after them, or made
+    /// [`wf_harness::BLOCK_CALLS`] of them without text.
+    Block,
     /// After the import of a comment by the session on its item.
     Comment(CommentId),
     /// At the end of a turn, which is also where a session parks.
     TurnEnd,
 }
 
-/// `{"snapshot": <tree>, "head": <commit>?, "base": <commit>?, "at": "comment" | "turn_end",
+/// `{"snapshot": <tree>, "head": <commit>?, "base": <commit>?, "at": "block" | "comment" | "turn_end",
 /// "comment": <id>?, "left_out": [...]}`, written by wf. `head` is where the item's branch was,
 /// which the uncommitted part of the snapshot is against; `base` is where it left the target then,
 /// which the committed part is against, also once the item is merged.
@@ -46,6 +49,7 @@ fn snapshot_entry(
             message["at"] = "comment".into();
             message["comment"] = comment.to_base32().into();
         }
+        SnapshotPoint::Block => message["at"] = "block".into(),
         SnapshotPoint::TurnEnd => message["at"] = "turn_end".into(),
     }
     TranscriptEntry {
@@ -157,8 +161,8 @@ impl Daemon {
             let unchanged = snapshot.previous == Some(snapshot.tree);
             match point {
                 SnapshotPoint::Comment(_) => {}
-                SnapshotPoint::TurnEnd if unchanged => return Ok(()),
-                SnapshotPoint::TurnEnd => {}
+                SnapshotPoint::Block | SnapshotPoint::TurnEnd if unchanged => return Ok(()),
+                SnapshotPoint::Block | SnapshotPoint::TurnEnd => {}
             }
             // The import before the snapshot moved the branch to what the agent committed.
             let git = GitCli::open(&wf_vcs::bare_repository(&workforce_directory)).ok();
