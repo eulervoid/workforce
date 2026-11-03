@@ -11,7 +11,7 @@ use wf_core::id::{HashId, ItemId};
 use super::chrome::SEPARATOR;
 use super::{KeysAt, Themed, accent, clear, highlight, themed};
 use crate::dashboard::app::{App, Choice, Inherited, Prompt, SetInput, Starter, Written};
-use crate::dashboard::hint::HELP;
+use crate::dashboard::hint::{HELP, Place};
 use crate::render;
 use crate::theme;
 
@@ -200,25 +200,80 @@ fn draw_popup(
     inner
 }
 
-/// Draws the keys, under their title in `accent`.
-pub(super) fn draw_keys(frame: &mut Frame, accent: Color, body: Rect, base: Style) {
-    let lines: Vec<Line> = HELP
+/// Draws the keys, under their title in `accent`: in sections by where they work, those of
+/// `first` first, on in the next column when they are taller than the body. The columns that do
+/// not fit beside the first are left out; returns whether any were.
+pub(super) fn draw_keys(
+    frame: &mut Frame,
+    first: Place,
+    accent: Color,
+    body: Rect,
+    base: Style,
+) -> bool {
+    let sections = HELP
         .iter()
-        .map(|hint| {
-            Line::from(vec![
-                themed(format!(" {:<12}", hint.label), theme::key()),
-                Span::raw(hint.what),
-            ])
-        })
-        .collect();
-    let height = (lines.len() as u16 + 2).min(body.height);
-    // The borders, and a space between the longest line and the right one.
-    let width = lines.iter().map(Line::width).max().unwrap_or_default() as u16 + 3;
+        .filter(|section| section.place == first)
+        .chain(HELP.iter().filter(|section| section.place != first));
+    // The rows inside the borders.
+    let height = usize::from(body.height.saturating_sub(2)).max(2);
+    let mut columns: Vec<Vec<Line>> = vec![Vec::new()];
+    for section in sections {
+        let mut title = section.title.to_owned();
+        let mut hints = section.hints;
+        while !hints.is_empty() {
+            let column = columns.last_mut().expect("there is a column");
+            // A blank line keeps the sections of a column apart.
+            let gap = usize::from(!column.is_empty());
+            // The title and at least one key, or the next column.
+            let room = height.saturating_sub(column.len() + gap + 1);
+            if room == 0 {
+                columns.push(Vec::new());
+                continue;
+            }
+            let mut taken = room.min(hints.len());
+            // A row that goes on with the one before stays with it.
+            while taken > 1 && taken < hints.len() && hints[taken].label.is_empty() {
+                taken -= 1;
+            }
+            if gap == 1 {
+                column.push(Line::default());
+            }
+            column.push(Line::from(themed(format!(" {title}"), theme::text_bold())));
+            column.extend(hints[..taken].iter().map(|hint| {
+                Line::from(vec![
+                    themed(format!(" {:<12}", hint.label), theme::key()),
+                    Span::raw(hint.what),
+                ])
+            }));
+            hints = &hints[taken..];
+            title = format!("{}, on", section.title);
+        }
+    }
+    // Each column as wide as its longest line, and a space before the next or the border; the
+    // first, and those after it that fit beside the borders.
+    let room = body.width.saturating_sub(4);
+    let mut width = 0;
+    let mut shown = Vec::new();
+    let mut left_out = false;
+    for lines in columns {
+        let column_width = lines.iter().map(Line::width).max().unwrap_or_default() as u16 + 1;
+        if shown.is_empty() || (!left_out && width + column_width <= room) {
+            width += column_width;
+            shown.push((lines, column_width));
+        } else {
+            left_out = true;
+        }
+    }
+    let rows = shown
+        .iter()
+        .map(|(lines, _)| lines.len())
+        .max()
+        .unwrap_or_default() as u16;
     let area = Rect {
         x: body.x + 1,
         y: body.y,
-        width: width.min(body.width.saturating_sub(2)),
-        height,
+        width: (width + 2).min(body.width.saturating_sub(2)),
+        height: (rows + 2).min(body.height),
     };
     // The title is drawn over the border, and without this would take on its dim.
     let undimmed = Style::new().remove_modifier(Modifier::DIM);
@@ -236,14 +291,22 @@ pub(super) fn draw_keys(frame: &mut Frame, accent: Color, body: Rect, base: Styl
         }),
     );
     clear(frame, area, base);
-    frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::bordered()
-                .border_style(Style::from(theme::divider()))
-                .title(Line::from(title)),
-        ),
-        area,
-    );
+    let block = Block::bordered()
+        .border_style(Style::from(theme::divider()))
+        .title(Line::from(title));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let mut x = inner.x;
+    for (lines, width) in shown {
+        let column = Rect {
+            x,
+            width: width.min(inner.right().saturating_sub(x)),
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(lines), column);
+        x = x.saturating_add(width);
+    }
+    left_out
 }
 
 /// The line the footer asks for, with the cursor in it.

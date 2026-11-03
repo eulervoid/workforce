@@ -349,3 +349,33 @@ fn the_keys_show_on_a_question_mark() {
     assert_eq!(press(&mut app, KeyCode::Char('q')), None);
     assert!(app.prompt.is_none());
 }
+
+#[test]
+fn the_keys_show_in_sections_those_of_where_the_keys_are_first() {
+    /// The title of the first section: the line after the popup's title.
+    fn first_section(app: &mut App) -> String {
+        press(app, KeyCode::Char('?'));
+        let drawn = Drawn::of(app, 150, 30);
+        press(app, KeyCode::Esc);
+        let lines = drawn.lines();
+        let title = lines.iter().position(|line| line.contains("keys")).unwrap();
+        lines[title + 1]
+            .trim_start_matches(['▎', ' ', '│'])
+            .split("  ")
+            .next()
+            .unwrap()
+            .to_owned()
+    }
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    assert_eq!(first_section(&mut app), "the items list");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(first_section(&mut app), "an item");
+    let mut diff = diff_app();
+    assert_eq!(first_section(&mut diff), "a diff");
+    // In a wide window, every section shows, in columns.
+    let mut app = self::app();
+    press(&mut app, KeyCode::Char('?'));
+    insta::assert_snapshot!("keys_in_columns", screen(&mut app, 180, 30));
+}

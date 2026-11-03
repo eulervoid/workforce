@@ -10,6 +10,7 @@ use super::effect::Effect;
 use super::nav::{Navigated, Opened, Pane, Scroll};
 use super::prompt::{Field, Filtered, Prompt, Written};
 use super::{App, GROUPINGS, ORDERS, Split, Status, Tab};
+use crate::dashboard::hint::Place;
 use crate::dashboard::snapshot::{Detail, InView};
 use crate::dashboard::transcript_lines::TranscriptLines;
 use crate::transcript::Verbosity;
@@ -115,6 +116,23 @@ impl App {
             }
             Split::One if self.pane_with_keys() != towards => self.split = Split::Both,
             Split::One => {}
+        }
+    }
+
+    /// Where the keys are, for the keys popup to show the keys of first.
+    pub fn keys_place(&self) -> Place {
+        if !self.list_has_keys() {
+            return match self.stack().last().map(|opened| &opened.detail) {
+                Some(Detail::Item(_)) => Place::Item,
+                Some(Detail::Session(_)) => Place::Transcript,
+                Some(Detail::Diff(_)) => Place::Diff,
+                Some(Detail::Agent(_) | Detail::Flag(_)) | None => Place::Everywhere,
+            };
+        }
+        match self.tab {
+            Tab::Items => Place::Items,
+            Tab::Now if !self.subjects().is_empty() => Place::Waiting,
+            Tab::Now | Tab::Agents | Tab::Log => Place::Everywhere,
         }
     }
 

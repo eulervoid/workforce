@@ -232,9 +232,20 @@ pub(super) fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
             draw_prompt(frame, app, prompt, keys);
         }
         Some(Prompt::Keys) => {
-            draw_keys(frame, accent(app, KeysAt::Keys), body, app.base);
+            let left_out = draw_keys(
+                frame,
+                app.keys_place(),
+                accent(app, KeysAt::Keys),
+                body,
+                app.base,
+            );
+            let hint = if left_out {
+                " any key closes · a wider window shows more"
+            } else {
+                " any key closes"
+            };
             frame.render_widget(
-                Paragraph::new(Line::from(" any key closes").themed(theme::text_dimmed())),
+                Paragraph::new(Line::from(hint).themed(theme::text_dimmed())),
                 keys,
             );
         }

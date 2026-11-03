@@ -92,39 +92,113 @@ pub const CHANGE_FILTER: Hint = Hint::key("/", KeyCode::Char('/'), "change filte
 pub const READINESS: Hint = Hint::key("F", KeyCode::Char('F'), "ready");
 pub const KEYS: Hint = Hint::key("?", KeyCode::Char('?'), "keys");
 
-/// Every key, by where it works, for the keys popup. A row without a label goes on with the one
-/// before.
-pub const HELP: &[Hint] = &[
-    Hint::keys("1-4 tab", "switch tabs, also shift-tab"),
-    Hint::keys("j/k g/G", "move, top, end (and follow)"),
-    Hint::keys("pgup/pgdn", "a page up, down"),
-    Hint::keys("space", "a page down in a text"),
-    Hint::keys("wheel", "move what is under the pointer"),
-    Hint::keys("click", "pick a tab or an entry, again to open"),
-    Hint::keys("", "follow a link, a key hint, a crumb"),
-    Hint::keys("shift-drag", "select text, as without the dashboard"),
-    Hint::keys("enter esc", "open, go back"),
-    Hint::keys("ctrl+o", "back to where a link was followed"),
-    Hint::keys("H L", "one pane or both, also shift ←/→"),
-    Hint::keys("a d", "allow, deny a permission request"),
-    Hint::keys("", "a click on allow asks for a second"),
-    Hint::keys("r R", "answer a blocker here, in $EDITOR"),
-    Hint::keys("ctrl+g", "carry a comment or answer to $EDITOR"),
-    Hint::keys("v D", "review, open the diff"),
-    Hint::keys("] [ enter", "diff: next, previous file, fold one"),
-    Hint::keys("v drag", "diff: select lines, as vim's visual line"),
-    Hint::keys("c r", "diff: comment, request a change on them"),
-    Hint::keys("e d", "diff: edit, drop a comment of the review"),
-    Hint::keys("R", "diff: review, as v does elsewhere"),
-    Hint::keys("p", "diff: in git's pager, as `wf item diff`"),
-    Hint::keys("s x", "start a session, stop one"),
-    Hint::keys("m p c e", "move, prioritise, comment on, edit an item"),
-    Hint::keys("E", "edit menu: every field of an item"),
-    Hint::keys("enter f", "transcript: open or close one entry, all"),
-    Hint::keys("i l", "item, diff"),
-    Hint::keys("n", "an ended session: its item's next"),
-    Hint::keys("o O", "items: grouping, order"),
-    Hint::keys("/ F", "items: title or id, readiness"),
-    Hint::keys("q", "quit"),
-    Hint::keys("tmux", "focus-events on: dims when unfocused"),
+/// Where keys work, as the keys popup puts them together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    Everywhere,
+    /// What waits on the principal: a permission request, a blocker, a review.
+    Waiting,
+    /// The list of the Items tab.
+    Items,
+    /// An item, open or selected.
+    Item,
+    EditMenu,
+    Transcript,
+    Diff,
+}
+
+/// The keys of a place, under its title.
+pub struct Section {
+    pub place: Place,
+    pub title: &'static str,
+    /// A row without a label goes on with the one before.
+    pub hints: &'static [Hint],
+}
+
+/// Every key, by where it works, for the keys popup.
+pub const HELP: &[Section] = &[
+    Section {
+        place: Place::Everywhere,
+        title: "everywhere",
+        hints: &[
+            Hint::keys("1-4 tab", "switch tabs, also shift-tab"),
+            Hint::keys("j/k g/G", "move, top, end (and follow)"),
+            Hint::keys("pgup/pgdn", "a page up, down"),
+            Hint::keys("space", "a page down in a text"),
+            Hint::keys("enter esc", "open, go back"),
+            Hint::keys("H L", "one pane or both, also shift ←/→"),
+            Hint::keys("wheel", "move what is under the pointer"),
+            Hint::keys("click", "pick a tab or an entry, again to open"),
+            Hint::keys("", "follow a link, a key hint, a crumb"),
+            Hint::keys("shift-drag", "select text, as without the dashboard"),
+            Hint::keys("ctrl+o", "back to where a link was followed"),
+            Hint::keys("q", "quit"),
+            Hint::keys("tmux", "focus-events on: dims when unfocused"),
+        ],
+    },
+    Section {
+        place: Place::Waiting,
+        title: "what waits",
+        hints: &[
+            Hint::keys("a d", "allow, deny a permission request"),
+            Hint::keys("", "a click on allow asks for a second"),
+            Hint::keys("r R", "answer a blocker here, in $EDITOR"),
+            Hint::keys("ctrl+g", "carry a comment or answer to $EDITOR"),
+            Hint::keys("v", "review the work"),
+        ],
+    },
+    Section {
+        place: Place::Items,
+        title: "the items list",
+        hints: &[
+            Hint::keys("o O", "grouping, order"),
+            Hint::keys("/ F", "filter by title or id, by readiness"),
+            Hint::keys("esc", "clear the filter"),
+        ],
+    },
+    Section {
+        place: Place::Item,
+        title: "an item",
+        hints: &[
+            Hint::keys("s x", "start a session, stop one"),
+            Hint::keys("c", "comment"),
+            Hint::keys("e", "title and body in $EDITOR"),
+            Hint::keys("m p", "move, priority"),
+            Hint::keys("E", "the edit menu: every field"),
+            Hint::keys("D", "the diff"),
+        ],
+    },
+    Section {
+        place: Place::EditMenu,
+        title: "the edit menu",
+        hints: &[
+            Hint::keys("j/k enter", "pick a field"),
+            Hint::keys("1-8 click", "pick it straight"),
+            Hint::keys("esc", "close"),
+            Hint::keys("labels", "typing filters, ↑/↓ move, space marks"),
+            Hint::keys("", "enter adds what is typed, else applies"),
+        ],
+    },
+    Section {
+        place: Place::Transcript,
+        title: "a transcript",
+        hints: &[
+            Hint::keys("enter f", "open or close one entry, all"),
+            Hint::keys("i l", "item, diff"),
+            Hint::keys("n", "an ended session: its item's next"),
+        ],
+    },
+    Section {
+        place: Place::Diff,
+        title: "a diff",
+        hints: &[
+            Hint::keys("] [ enter", "next, previous file, fold one"),
+            Hint::keys("v drag", "select lines, as vim's visual line"),
+            Hint::keys("c r", "comment, request a change on them"),
+            Hint::keys("e d", "edit, drop a comment of the review"),
+            Hint::keys("R", "review, as v does elsewhere"),
+            Hint::keys("p", "in git's pager, as `wf item diff`"),
+            Hint::keys("i", "the item"),
+        ],
+    },
 ];
