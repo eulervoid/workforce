@@ -13,12 +13,12 @@ use wf_core::name::{AgentName, HarnessName};
 use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::{AgentDefinition, State};
 use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
-use wf_vcs::{GitCli, item_branch, session_directory};
+use wf_vcs::{GitCli, VcsError, item_branch, remove_agent_repository, session_directory};
 
 use super::drive::run_session;
 use super::{Begin, Run, SessionError, blocking};
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
-use crate::machine_config::{EnvironmentConfig, SandboxConfig};
+use crate::machine_config::{EnvironmentConfig, PrepareConfig, SandboxConfig};
 use crate::{Daemon, Loaded};
 
 /// The agent as the machine config says to run it: in a sandbox, or as it is. A config that is
@@ -138,6 +138,7 @@ impl Daemon {
             item_context,
             target: policy.merge.target.clone(),
             transcripts,
+            prepare: machine_config.prepare,
         })
     }
 
@@ -219,7 +220,7 @@ impl Daemon {
         // the item and a slot until the next daemon starts.
         let directory = self.session_directory(workforce, item, session, &role);
         let prepared = async {
-            match &role {
+            let made = match &role {
                 // The branch is the claim's to move, so only once the claim is written.
                 SessionRole::Work => {
                     let path = directory.clone();
@@ -231,10 +232,11 @@ impl Daemon {
                             git.bring_item_branch_to(item, head)?;
                         }
                         let commit = git.starting_commit(item, &target)?;
-                        git.create_agent_repository(&path, &branch, commit)?;
-                        git.ensure_item_branch(item, commit)
+                        let made = git.create_agent_repository(&path, &branch, commit)?;
+                        git.ensure_item_branch(item, commit)?;
+                        Ok::<_, VcsError>(made)
                     })
-                    .await??;
+                    .await??
                 }
                 SessionRole::Review {
                     commit: Some(commit),
@@ -242,6 +244,7 @@ impl Daemon {
                 } => {
                     let (path, git, commit) = (directory.clone(), git.clone(), *commit);
                     blocking(move || git.create_review_repository(&path, commit)).await??;
+                    true
                 }
                 SessionRole::Review { commit: None, .. }
                 | SessionRole::Supervise
@@ -250,7 +253,20 @@ impl Daemon {
                         path: directory.clone(),
                         source,
                     })?;
+                    false
                 }
+            };
+            // A repository later sessions continue was prepared for the first.
+            if made
+                && let Some(prepare) = &setup.prepare
+                && let Err(error) = self
+                    .prepare_repository(&setup, session, &directory, prepare)
+                    .await
+            {
+                // It has no work yet: the next start makes it again, and prepares it.
+                let path = directory.clone();
+                blocking(move || remove_agent_repository(&path)).await??;
+                return Err(error);
             }
             let state = self.snapshot(loaded).await?;
             if let Some((item, to)) = state.start_move(session) {
@@ -326,6 +342,7 @@ impl Daemon {
             item_context,
             target,
             transcripts,
+            prepare: _,
         } = setup;
         // The agent commits as itself, `@principal/agent`, as it is named everywhere else.
         let mut git_environment = agent_signing.environment();
@@ -427,4 +444,6 @@ pub(super) struct Setup {
     pub(super) item_context: ItemContext,
     pub(super) target: String,
     pub(super) transcripts: PathBuf,
+    /// What prepares a repository made for the session, as the machine config says.
+    pub(super) prepare: Option<PrepareConfig>,
 }

@@ -1701,9 +1701,11 @@ mod tests {
     /// The repository of the agent `@ada/coder` on `wf/k3f9`, started at `main`, and git there.
     fn agent_repository(repo: &TestRepo) -> (PathBuf, GitCli) {
         let path = repo.root.path().join("agent");
-        repo.git
+        let made = repo
+            .git
             .create_agent_repository(&path, "wf/k3f9", repo.main())
             .unwrap();
+        assert!(made);
         for (key, value) in [
             ("user.name", "@ada/coder"),
             ("user.email", "ada@example.com"),
@@ -1771,9 +1773,11 @@ mod tests {
         let repo = TestRepo::new();
         let (path, _) = agent_repository(&repo);
         let work = commit_in(&path, "a.txt", "a\n");
-        repo.git
+        let made = repo
+            .git
             .create_agent_repository(&path, "wf/k3f9", repo.main())
             .unwrap();
+        assert!(!made);
         assert_eq!(git_in(&path, &["rev-parse", "HEAD"]), work.to_string());
     }
 

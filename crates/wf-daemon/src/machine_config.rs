@@ -54,6 +54,8 @@ pub struct MachineConfig {
     pub storage: Option<StorageConfig>,
     #[serde(default)]
     pub check: CheckRunConfig,
+    /// Without it, an agent starts in a new repository as wf made it.
+    pub prepare: Option<PrepareConfig>,
     /// `[theme]` is the CLI's: the daemon accepts it and reads nothing from it.
     #[serde(default)]
     theme: serde::de::IgnoredAny,
@@ -76,6 +78,24 @@ impl CheckRunConfig {
     pub fn timeout(&self, check: &CheckConfig) -> Duration {
         self.max_timeout
             .map_or(check.timeout, |max| max.min(check.timeout))
+    }
+}
+
+/// The command that prepares a new agent repository before its agent starts, such as by copying a
+/// build cache into it: `[prepare]`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrepareConfig {
+    /// The program and its arguments, run without a shell in the repository.
+    pub run: Vec<String>,
+    /// The longest it runs, such as `"10m"`.
+    #[serde(default = "PrepareConfig::default_timeout", with = "humantime_serde")]
+    pub timeout: Duration,
+}
+
+impl PrepareConfig {
+    fn default_timeout() -> Duration {
+        Duration::from_secs(10 * 60)
     }
 }
 
@@ -424,6 +444,15 @@ impl MachineConfig {
                 "`command` under `[notify]` needs a program".to_string(),
             ));
         }
+        if config
+            .prepare
+            .as_ref()
+            .is_some_and(|prepare| prepare.run.is_empty())
+        {
+            return Err(ParseError::Invalid(
+                "`run` under `[prepare]` needs a program".to_string(),
+            ));
+        }
         if let Some(storage) = &config.storage {
             storage.check().map_err(ParseError::Invalid)?;
         }
@@ -717,6 +746,29 @@ mod tests {
             "[storage]\nbudget = \"twenty\"\ncaches = [\"target\"]",
             "[storage]\ncaches = [\"target\"]",
         ] {
+            assert!(MachineConfig::parse(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn prepare_runs_a_program_for_ten_minutes_unless_it_says_otherwise() {
+        assert_eq!(MachineConfig::parse("").ok().unwrap().prepare, None);
+        assert_eq!(
+            MachineConfig::parse("[prepare]\nrun = [\"cp\", \"-R\", \"a\", \"b\"]\n")
+                .ok()
+                .unwrap()
+                .prepare,
+            Some(PrepareConfig {
+                run: ["cp", "-R", "a", "b"].map(String::from).to_vec(),
+                timeout: Duration::from_secs(10 * 60),
+            })
+        );
+        let quick = MachineConfig::parse("[prepare]\nrun = [\"true\"]\ntimeout = \"30s\"\n");
+        assert_eq!(
+            quick.ok().unwrap().prepare.unwrap().timeout,
+            Duration::from_secs(30)
+        );
+        for text in ["[prepare]\nrun = []\n", "[prepare]\ntimeout = \"1m\"\n"] {
             assert!(MachineConfig::parse(text).is_err(), "{text}");
         }
     }

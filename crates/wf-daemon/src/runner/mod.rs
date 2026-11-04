@@ -10,6 +10,7 @@ mod drive;
 mod end;
 mod merge;
 mod offered;
+mod prepare;
 mod repositories;
 mod resume;
 pub(crate) mod snapshots;
@@ -95,6 +96,17 @@ pub enum SessionError {
     SigningKey(#[from] wf_vcs::signing::SigningKeyError),
     #[error("cannot run a check: {0}")]
     Check(#[from] CommandError),
+    #[error("cannot run the prepare command of the machine config: {0}")]
+    PrepareCommand(#[source] CommandError),
+    #[error(
+        "the prepare command of the machine config {failure}; its log is {}:\n{tail}",
+        log.display()
+    )]
+    PrepareFailed {
+        failure: prepare::PrepareFailure,
+        tail: String,
+        log: PathBuf,
+    },
     #[error(
         "agents run in Fence on this machine, but `fence` is not on PATH; install it, or set \
          `kind = \"off\"` under `[sandbox]` in the machine config to run them without a sandbox"
@@ -118,6 +130,7 @@ impl SessionError {
             Self::Authoring(AuthorError::Receive(ReceiveError::Store(_)))
             | Self::Storage(_)
             | Self::Check(CommandError::Io { .. })
+            | Self::PrepareCommand(CommandError::Io { .. })
             | Self::Io { .. } => true,
             Self::Authoring(
                 AuthorError::Receive(ReceiveError::Invalid(_))
@@ -151,6 +164,13 @@ impl SessionError {
                 | CommandError::NoFence
                 | CommandError::Task(_),
             )
+            | Self::PrepareCommand(
+                CommandError::Empty(_)
+                | CommandError::Vcs(_)
+                | CommandError::NoFence
+                | CommandError::Task(_),
+            )
+            | Self::PrepareFailed { .. }
             | Self::NoFence => false,
         }
     }

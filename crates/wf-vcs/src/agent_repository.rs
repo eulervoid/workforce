@@ -43,9 +43,10 @@ fn untrusted<'a>(args: impl IntoIterator<Item = &'a str>) -> Vec<String> {
 }
 
 impl GitCli {
-    /// Makes the repository of an agent at `path`, with `branch` checked out at `commit`. The
-    /// agent's objects directory has the principal's as alternate. Does nothing if the
-    /// repository is there already, which later sessions on the item continue.
+    /// Makes the repository of an agent at `path`, with `branch` checked out at `commit`, and
+    /// returns whether it made it. The agent's objects directory has the principal's as
+    /// alternate. Does nothing if the repository is there already, which later sessions on the
+    /// item continue.
     ///
     /// This is the only time the daemon runs git in the repository, before the agent touches it.
     pub fn create_agent_repository(
@@ -53,9 +54,9 @@ impl GitCli {
         path: &Path,
         branch: &str,
         commit: CommitId,
-    ) -> Result<(), VcsError> {
+    ) -> Result<bool, VcsError> {
         if path.join(".git").exists() {
-            return Ok(());
+            return Ok(false);
         }
         self.init_with_alternates(path, ["-b", branch])?;
         let reference = format!("refs/heads/{branch}");
@@ -70,7 +71,7 @@ impl GitCli {
             self.run(path, &[], ["config", "user.email", &address])?
                 .ok()?;
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Makes a repository at `path` with `commit` checked out, detached, for a reviewer.

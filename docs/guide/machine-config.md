@@ -199,6 +199,38 @@ caches = ["target"]              # paths inside a repository that can be rebuilt
 The repository of a review goes when the review ends, the repository of an item when it is done or
 cancelled, and a daemon that starts removes whatever else is left in its repositories directory.
 
+## Preparing a new repository
+
+`[prepare]` names a command the daemon runs in each repository it makes for a session, the
+repository of an item at its first session and that of each review, before the agent starts. Later
+sessions on the item continue the repository as it is, without running it again. It runs without a
+shell, in the sandbox and environment of the session's agent, and gets `WF_CHECK_DIRECTORY`: the
+workforce's check worktree, where the checks build the merge results, so its build output is close
+to the tip of the target. It is not there before the first check, and it may change while the
+command reads it, as a check can run at the same time.
+
+```toml
+[prepare]
+run = ["sh", "-c", "cp -c -R \"$WF_CHECK_DIRECTORY/target\" target || true"]
+timeout = "10m"                  # the default
+```
+
+A command that fails or runs longer than its timeout fails the session's start, with the end of its
+output and the path of its whole log, and the repository is removed, so the next start makes and
+prepares it again. A cache that may be missing, as above, ends in `|| true`.
+
+What to copy depends on the build tool:
+
+* **Cargo**: copy `target`, as above. On macOS, `cp -c` clones the files, which takes seconds and no
+  space until one of the copies changes; on Linux, `cp --reflink=auto -R` does the same where the
+  file system can. The dependencies are fresh; the crates of the repository build again, as their
+  files are newer than the copy. Without `CARGO_INCREMENTAL = "0"` the copy carries
+  `target/debug/incremental` too. `[storage]` counts each copy at its full size, whatever the clones
+  share.
+* **npm, bun, uv**: a copied `node_modules` or `.venv` often does not work in another directory. Their
+  package caches ([Caches of package managers](#caches-of-package-managers)) make an install fast,
+  so the command can install: `["npm", "ci"]`, `["uv", "sync"]`.
+
 ## One agent
 
 `[agent.<name>]` gives one of your agents more, on top of what every agent gets. Where both set the

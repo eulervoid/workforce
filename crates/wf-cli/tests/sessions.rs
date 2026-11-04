@@ -1310,6 +1310,60 @@ wf work release --note \"later\"
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_prepare_command_runs_once_in_a_new_agent_repository_with_the_agents_environment() {
+    let world = World::new("wf work release --note \"later\"\n").await;
+    world.machine_config(
+        "[environment]\nset = { MARK = \"from the config\" }\n\
+         [prepare]\nrun = [\"sh\", \"-c\", \"echo \\\"$MARK, ${WF_CHECK_DIRECTORY##*/}\\\" >> prepared.txt\"]\n",
+    );
+    let item = world.wf.add(&["--title", "Prepared"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+    let prepared =
+        PathBuf::from(world.wf.run(&["item", "path", short(&item)]).trim()).join("prepared.txt");
+    assert_eq!(
+        std::fs::read_to_string(&prepared).unwrap(),
+        "from the config, check\n"
+    );
+
+    start_session(&world, &item);
+    world
+        .wait("the second session to end", |world| {
+            world
+                .sessions()
+                .iter()
+                .all(|session| session["status"] != "live")
+        })
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(&prepared).unwrap(),
+        "from the config, check\n",
+        "the repository the second session continues is not prepared again"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prepare_command_that_fails_fails_the_start_with_the_end_of_its_output() {
+    let world = World::new("say never runs\n").await;
+    world.machine_config("[prepare]\nrun = [\"sh\", \"-c\", \"echo no cache here; exit 3\"]\n");
+    let item = world.wf.add(&["--title", "Unprepared"]);
+    let error = world
+        .wf
+        .fail(&["session", "start", short(&item), "--agent", "coder"]);
+    assert!(error.contains("exit status: 3"), "{error}");
+    assert!(error.contains("no cache here"), "{error}");
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "failed");
+    assert_eq!(world.item(&item)["state"], "open");
+
+    world.machine_config("[prepare]\nrun = [\"touch\", \"prepared.txt\"]\n");
+    start_session(&world, &item);
+    let prepared =
+        PathBuf::from(world.wf.run(&["item", "path", short(&item)]).trim()).join("prepared.txt");
+    assert!(prepared.is_file(), "the next start prepares the repository");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_agent_that_never_commits_or_submits_is_released_after_its_nudges() {
     let world = World::new("").await;
     let item = world.wf.add(&["--title", "Idle"]);
