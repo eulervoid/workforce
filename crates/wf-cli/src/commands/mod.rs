@@ -228,14 +228,10 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// The workforce of the working directory, for the commands that read or write its log, with the
-/// target of the principal's checkout and wf's brought in step as `movable` lets it. When the
-/// checkout still has commits on the target that agents cannot see, one line on stderr says so;
-/// never with `--json`, and never in a session.
 /// Takes the rewritten target as the target. The principal names the commit, so that what they
 /// looked at is what is adopted.
 fn adopt_target(json: bool, workspace: &mut Workspace, commit: &str) -> anyhow::Result<()> {
-    let Some(unrelated) = workspace.machine_faults()?.unrelated_target else {
+    let Some(unrelated) = workspace.unrelated_target()? else {
         bail!("the target follows the log: there is nothing to adopt");
     };
     let branch = unrelated.branch;
@@ -255,6 +251,10 @@ fn adopt_target(json: bool, workspace: &mut Workspace, commit: &str) -> anyhow::
     )
 }
 
+/// The workforce of the working directory, for the commands that read or write its log, with the
+/// target of the principal's checkout and wf's brought in step as `movable` lets it. When the
+/// checkout still has commits on the target that agents cannot see, one line on stderr says so;
+/// never with `--json`, and never in a session.
 fn open(json: bool, movable: Movable, data: DataDir, cwd: &Path) -> anyhow::Result<Workspace> {
     let workspace = Workspace::open(data, cwd, false)?;
     let apart = follow_target(json, &workspace, movable);

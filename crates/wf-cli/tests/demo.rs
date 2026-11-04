@@ -1945,6 +1945,17 @@ fn the_checkout_and_wfs_repository_follow_each_other_where_one_fast_forwards_the
 }
 
 #[test]
+fn adopting_a_target_without_a_daemon_says_the_daemon_is_needed() {
+    let wf = Sandbox::new();
+    wf_vcs::testing::init_repository(&wf.repository);
+    wf.run(&["init", "--name", "demo"]);
+
+    let error = wf.fail(&["target", "adopt", "275857e0"]);
+    assert!(error.contains("wf daemon start"), "{error}");
+    assert!(!error.contains("nothing to adopt"), "{error}");
+}
+
+#[test]
 fn a_rewritten_target_waits_in_the_inbox_until_the_principal_adopts_it() {
     use wf_vcs::testing::{git_in, init_repository};
 
