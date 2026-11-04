@@ -673,7 +673,9 @@ impl App {
                 | InboxEntry::Review { item, .. }
                 | InboxEntry::Notice { item, .. } => Some(Detail::Item(item.id)),
                 // The row says all there is to say.
-                InboxEntry::MachineFault { .. } | InboxEntry::LostPush { .. } => None,
+                InboxEntry::MachineFault { .. }
+                | InboxEntry::LostPush { .. }
+                | InboxEntry::UnrelatedTarget { .. } => None,
             },
             NowRow::Session(session) => Some(
                 self.session_info(*session)
@@ -701,7 +703,8 @@ impl App {
             InboxEntry::MachineFault { title, notice } => {
                 Some((title, notice.paragraphs(&|at_ms| self.when(at_ms), width)))
             }
-            InboxEntry::LostPush { title, what, .. } => Some((title, vec![what.clone()])),
+            InboxEntry::LostPush { title, what, .. }
+            | InboxEntry::UnrelatedTarget { title, what, .. } => Some((title, vec![what.clone()])),
             InboxEntry::Permission { .. }
             | InboxEntry::Blocker { .. }
             | InboxEntry::Review { .. }
@@ -897,7 +900,9 @@ impl App {
                 InboxEntry::Blocker { item, .. }
                 | InboxEntry::Review { item, .. }
                 | InboxEntry::Notice { item, .. } => Some(item),
-                InboxEntry::MachineFault { .. } | InboxEntry::LostPush { .. } => None,
+                InboxEntry::MachineFault { .. }
+                | InboxEntry::LostPush { .. }
+                | InboxEntry::UnrelatedTarget { .. } => None,
             })
             .map(|item| (item.id, item.title.as_str()));
         let listed = snapshot
@@ -952,7 +957,8 @@ impl App {
                 | InboxEntry::Review { .. }
                 | InboxEntry::Notice { .. }
                 | InboxEntry::MachineFault { .. }
-                | InboxEntry::LostPush { .. } => None,
+                | InboxEntry::LostPush { .. }
+                | InboxEntry::UnrelatedTarget { .. } => None,
             },
             NowRow::Flag(_) => None,
         }
@@ -1012,7 +1018,8 @@ impl App {
                     InboxEntry::Permission { .. }
                     | InboxEntry::Notice { .. }
                     | InboxEntry::MachineFault { .. }
-                    | InboxEntry::LostPush { .. } => false,
+                    | InboxEntry::LostPush { .. }
+                    | InboxEntry::UnrelatedTarget { .. } => false,
                 })
                 .collect(),
             // A diff is looked at to review it.
@@ -1023,7 +1030,8 @@ impl App {
                     | InboxEntry::Blocker { .. }
                     | InboxEntry::Notice { .. }
                     | InboxEntry::MachineFault { .. }
-                    | InboxEntry::LostPush { .. } => false,
+                    | InboxEntry::LostPush { .. }
+                    | InboxEntry::UnrelatedTarget { .. } => false,
                 })
                 .collect(),
             Some(Detail::Agent(_) | Detail::Flag(_) | Detail::WorkAt { .. }) | None => Vec::new(),

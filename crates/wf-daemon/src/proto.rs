@@ -18,7 +18,7 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::lifecycle::Finish;
 use wf_core::name::{AgentName, ReviewStepName};
-use wf_core::session::{CommentSnapshot, GitOid};
+use wf_core::session::{CommentSnapshot, CommitId, GitOid};
 use wf_harness::Permission;
 use wf_net::frame::{FrameError, blocking as frame};
 use wf_net::{ChangesAnswer, DiffAnswer, WorkAt};
@@ -26,7 +26,7 @@ use wf_net::{ChangesAnswer, DiffAnswer, WorkAt};
 use crate::caller::{Caller, Token};
 use crate::founding::Founding;
 
-pub const PROTOCOL_VERSION: u32 = 32;
+pub const PROTOCOL_VERSION: u32 = 33;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -152,7 +152,8 @@ pub enum Call {
         answer: Permission,
     },
     /// What is wrong with the machine, as [`MachineFaults`](crate::MachineFaults): that the
-    /// daemon's writes fail for lack of space, and the harnesses whose sessions cannot run.
+    /// daemon's writes fail for lack of space, the harnesses whose sessions cannot run, and a
+    /// target branch that shares no history with the tip the log names.
     MachineFaults,
     /// What the caches in the agent repositories of the workforce took when the daemon last checked them
     /// against the budget of the machine config, as `Option<CacheUsage>`; `None` without a budget.
@@ -184,6 +185,9 @@ pub enum Call {
         against: GitOid,
         snapshot: GitOid,
     },
+    /// Writes the target branch, at this commit and unrelated to the tip the log names, as a move
+    /// from that tip; answered with `()`.
+    AdoptTarget(CommitId),
 }
 
 /// What a [`Call::LiveDiff`] came to.
@@ -444,6 +448,7 @@ mod tests {
             Call::Permissions => "Permissions",
             Call::AnswerPermission { .. } => "AnswerPermission",
             Call::MachineFaults => "MachineFaults",
+            Call::AdoptTarget(_) => "AdoptTarget",
             Call::CacheUsage => "CacheUsage",
             Call::LiveDiff { .. } => "LiveDiff",
             Call::SnapshotDiff { .. } => "SnapshotDiff",
@@ -455,7 +460,7 @@ mod tests {
     }
 
     /// The number of arms of [`golden_name`].
-    const CALL_VARIANTS: usize = 24;
+    const CALL_VARIANTS: usize = 25;
 
     /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
     /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
@@ -541,6 +546,9 @@ mod tests {
                 against: "0123456789abcdef0123456789abcdef01234567".parse().unwrap(),
                 snapshot: "89abcdef0123456789abcdef0123456789abcdef".parse().unwrap(),
             },
+            Call::AdoptTarget(CommitId::Git(
+                "0123456789abcdef0123456789abcdef01234567".parse().unwrap(),
+            )),
         ];
         assert_eq!(
             calls.len(),
@@ -601,7 +609,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_REQUESTS: [(&str, usize, &str); 25] = [
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 26] = [
         (
             "State",
             35,
@@ -723,13 +731,18 @@ mod tests {
             "ck3y5n6qdmnoufikqewy5upboyaitol4kmgkpi7suyewxqeapega",
         ),
         (
+            "AdoptTarget",
+            57,
+            "4z76wprhdf7bd7kzw5zcglgugeuemcm77pswyfmfukin76widjpq",
+        ),
+        (
             "Found",
             1773,
             "ihsn5ybw6tf7wxfz6dsdvku4woizasnstbxkmep6qbswoigxryvq",
         ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 32;
+    const GOLDEN_PROTOCOL_VERSION: u32 = 33;
     const GOLDEN_REPLIES: [(&str, usize, &str); 11] = [
         (
             "State",
@@ -748,8 +761,8 @@ mod tests {
         ),
         (
             "MachineFaults",
-            3,
-            "sfjf74akg5k2rx4tyytllh3og3hqehmf5pgozxw4hdz7dcikcx6a",
+            4,
+            "5qv5ao7ynojv7i2nogwx5oyet4prb6d5gq7fefir3d46myswedgq",
         ),
         (
             "CacheUsage",

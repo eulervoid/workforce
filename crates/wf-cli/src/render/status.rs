@@ -56,6 +56,9 @@ pub fn status(view: &StatusView) -> String {
     for line in &view.awaiting_commits {
         let _ = writeln!(out, "waiting: {line}");
     }
+    if let Some(unrelated) = &view.unrelated_target {
+        let _ = writeln!(out, "! {unrelated}");
+    }
     for flag in &view.flagged {
         let _ = writeln!(out, "! {flag}");
     }
@@ -138,6 +141,7 @@ mod tests {
             refolded: false,
             caches: None,
             awaiting_commits: Vec::new(),
+            unrelated_target: None,
             checkout_target: None,
         }
     }

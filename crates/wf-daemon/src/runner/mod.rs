@@ -58,6 +58,10 @@ pub enum SessionError {
     UnknownHarness(HarnessName),
     #[error("the workforce has no policy yet")]
     NoPolicy,
+    #[error("the target follows the log: there is nothing to adopt")]
+    TargetNotUnrelated,
+    #[error("the target moved to {}: look at it, and adopt that if it is right", .branch.short())]
+    TargetElsewhere { branch: CommitId },
     #[error("there is no item #{}", .0.short())]
     UnknownItem(ItemId),
     #[error("#{} is archived", .0.short())]
@@ -142,6 +146,8 @@ impl SessionError {
             )
             | Self::NotBound
             | Self::NoPolicy
+            | Self::TargetNotUnrelated
+            | Self::TargetElsewhere { .. }
             | Self::UnknownAgent(_)
             | Self::UnknownHarness(_)
             | Self::UnknownItem(_)

@@ -782,7 +782,10 @@ impl GitCli {
         }
         // A failure that names no tree is git failing, not a conflict.
         if tree.trim().is_empty() {
-            return Err(merged.error());
+            return match self.merge_base(base, commit)? {
+                Some(_) => Err(merged.error()),
+                None => Ok(MergeTree::Unrelated),
+            };
         }
         let paths = fields
             .take_while(|field| !field.is_empty())
@@ -892,6 +895,16 @@ impl GitCli {
                 if contained.success {
                     return Ok(Rebase::UpToDate);
                 }
+                let shared = self.run(directory, &[], ["merge-base", onto.as_str(), "HEAD"])?;
+                // Exit status 1 without output: no common ancestor. Anything else is an error, a
+                // missing object for one.
+                if !shared.success
+                    && shared.stdout.trim().is_empty()
+                    && shared.stderr.trim().is_empty()
+                {
+                    return Ok(Rebase::Unrelated);
+                }
+                shared.ok()?;
                 let paths = self.changed_paths(directory)?;
                 if !paths.is_empty() {
                     return Ok(Rebase::DirtyCheckout(DirtyCheckout {
@@ -1083,6 +1096,7 @@ mod tests {
             match self.merge_tree(target, commit)? {
                 MergeTree::Landed { commit } => Ok(MergeOutcome::Merged { commit }),
                 MergeTree::Conflict { paths } => Ok(MergeOutcome::Conflict { paths }),
+                MergeTree::Unrelated => unreachable!("the tests merge related histories"),
                 MergeTree::Clean { base, tree } => {
                     self.commit_merge(target, base, tree, commit, message, signing)
                 }
@@ -2326,6 +2340,53 @@ mod tests {
                 paths: vec!["file.txt".into()],
             }
         );
+    }
+
+    /// A commit with the tree of `main` and no history, on no branch.
+    fn rootless_rewrite(repo: &TestRepo) -> CommitId {
+        let commit = git_in(
+            &repo.directory(),
+            &["commit-tree", "main^{tree}", "-m", "rewritten"],
+        );
+        CommitId::Git(commit.parse().unwrap())
+    }
+
+    #[test]
+    fn work_with_no_history_in_common_with_the_target_is_said_to_be_unrelated() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "work.txt", "work\n");
+        let rewritten = rootless_rewrite(&repo);
+        git_in(
+            &repo.directory(),
+            &["update-ref", "refs/heads/main", &rewritten.to_string()],
+        );
+        assert_eq!(
+            repo.git.merge_tree("main", work).unwrap(),
+            MergeTree::Unrelated
+        );
+    }
+
+    #[test]
+    fn a_branch_with_no_history_in_common_with_the_target_is_not_rebased() {
+        let repo = TestRepo::new();
+        let (directory, agent) = agent_repository(&repo);
+        let work = commit_in(&directory, "a.txt", "a\n");
+        let rewritten = rootless_rewrite(&repo);
+        assert_eq!(agent.rebase_plain(rewritten).unwrap(), Rebase::Unrelated);
+        assert_eq!(agent.branch_head("wf/k3f9").unwrap(), work);
+    }
+
+    #[test]
+    fn a_target_whose_objects_are_gone_is_an_error_not_unrelated() {
+        let repo = TestRepo::new();
+        let (directory, agent) = agent_repository(&repo);
+        let work = commit_in(&directory, "a.txt", "a\n");
+        let missing = CommitId::Git("0123456789abcdef0123456789abcdef01234567".parse().unwrap());
+        assert!(matches!(
+            agent.rebase_plain(missing),
+            Err(VcsError::Git { .. })
+        ));
+        assert_eq!(agent.branch_head("wf/k3f9").unwrap(), work);
     }
 
     #[test]

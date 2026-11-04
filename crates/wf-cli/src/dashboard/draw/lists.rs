@@ -397,7 +397,8 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
             row.lines(first, None, vec![more])
         }
         InboxEntry::MachineFault { title, notice } => fault_lines(title, &notice.what(), row),
-        InboxEntry::LostPush { title, what, .. } => fault_lines(title, what, row),
+        InboxEntry::LostPush { title, what, .. }
+        | InboxEntry::UnrelatedTarget { title, what, .. } => fault_lines(title, what, row),
     }
 }
 

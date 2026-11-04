@@ -1,5 +1,6 @@
 //! What is wrong with this machine: writes that fail for lack of space, and harnesses whose login
-//! lapsed or that cannot be reached. The daemon remembers since when, so that the inbox tells the
+//! lapsed or that cannot be reached, and a target of `<wf>/git` that was rewritten so that it shares
+//! no history with the tip the log names. The daemon remembers since when, so that the inbox tells the
 //! principal once what is wrong instead of a comment per session, and so that no session is
 //! started that would fail for it. It forgets a fault once the machine is fine again.
 
@@ -12,7 +13,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use wf_core::id::WorkforceId;
 use wf_core::name::{AgentName, HarnessName};
-use wf_core::session::{HarnessFault, MachineFault};
+use wf_core::session::{CommitId, HarnessFault, MachineFault};
 
 /// What is wrong with this machine now.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,17 +21,35 @@ pub struct MachineFaults {
     pub out_of_space: Option<OutOfSpace>,
     /// The harnesses whose sessions cannot run.
     pub harnesses: BTreeMap<HarnessName, HarnessAtFault>,
+    /// In the workforce asked about, the target branch of its `<wf>/git`, if merges stand still
+    /// for it.
+    pub unrelated_target: Option<UnrelatedTarget>,
 }
 
 impl MachineFaults {
     pub fn is_empty(&self) -> bool {
-        self.out_of_space.is_none() && self.harnesses.is_empty()
+        self.out_of_space.is_none() && self.harnesses.is_empty() && self.unrelated_target.is_none()
     }
 
-    /// How many things are wrong: the disk, and each harness.
+    /// How many things are wrong: the disk, each harness, and the target.
     pub fn count(&self) -> usize {
-        usize::from(self.out_of_space.is_some()) + self.harnesses.len()
+        usize::from(self.out_of_space.is_some())
+            + self.harnesses.len()
+            + usize::from(self.unrelated_target.is_some())
     }
+}
+
+/// The target branch of `<wf>/git` has no history in common with the tip the log names, so it can
+/// neither follow the log nor be taken for a push, and no merge starts until the principal says
+/// which of them is right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnrelatedTarget {
+    /// Where the branch is.
+    pub branch: CommitId,
+    /// Where the log says it is.
+    pub tip: CommitId,
+    /// When this was first seen of this branch and tip, in milliseconds since the Unix epoch.
+    pub since_ms: u64,
 }
 
 /// The disk the daemon writes to is full.
@@ -83,6 +102,7 @@ pub(crate) struct Faults {
     /// The agents each workforce has on a harness that no command is known for. The machine is
     /// at fault for a harness for as long as any workforce has one; locked before `machine`.
     unknown: Mutex<BTreeMap<WorkforceId, BTreeMap<HarnessName, Vec<AgentName>>>>,
+    unrelated_targets: Mutex<BTreeMap<WorkforceId, UnrelatedTarget>>,
 }
 
 impl Faults {
@@ -209,6 +229,45 @@ impl Faults {
         }
     }
 
+    /// Remembers that `target` of `workforce` is at `branch`, unrelated to the `tip` of the log.
+    /// Logged once for each branch and tip, however many passes find it.
+    pub(crate) fn note_unrelated_target(
+        &self,
+        workforce: WorkforceId,
+        target: &str,
+        branch: CommitId,
+        tip: CommitId,
+    ) {
+        let mut targets = self.unrelated_targets();
+        if targets
+            .get(&workforce)
+            .is_some_and(|known| (known.branch, known.tip) == (branch, tip))
+        {
+            return;
+        }
+        tracing::warn!(
+            "{target} is at {branch}, which has no history in common with {tip}, the tip the log \
+             names; no merge starts until `wf target adopt {}` or {target} is back at {}",
+            branch.short(),
+            tip.short()
+        );
+        targets.insert(
+            workforce,
+            UnrelatedTarget {
+                branch,
+                tip,
+                since_ms: wf_store::now_ms(),
+            },
+        );
+    }
+
+    /// Forgets that the target of `workforce` was unrelated to the tip: a pass found it is not.
+    pub(crate) fn target_followed(&self, workforce: WorkforceId, target: &str) {
+        if self.unrelated_targets().remove(&workforce).is_some() {
+            tracing::info!("{target} follows the log again");
+        }
+    }
+
     /// Forgets what was wrong with `harness`: it has answered a turn.
     pub(crate) fn harness_answered(&self, harness: &HarnessName) {
         if self.lock().harnesses.remove(harness).is_some() {
@@ -243,6 +302,14 @@ impl Faults {
         self.lock().clone()
     }
 
+    /// What is wrong with this machine now, as `workforce` sees it.
+    pub(crate) fn current_in(&self, workforce: WorkforceId) -> MachineFaults {
+        MachineFaults {
+            unrelated_target: self.unrelated_targets().get(&workforce).copied(),
+            ..self.current()
+        }
+    }
+
     /// Forgets that the disk is full once a probe write in `directory` succeeds.
     pub(crate) fn check_space(&self, directory: &Path) {
         if self.lock().out_of_space.is_none() {
@@ -255,6 +322,14 @@ impl Faults {
             tracing::info!("there is space on the disk again");
             self.lock().out_of_space = None;
         }
+    }
+
+    fn unrelated_targets(
+        &self,
+    ) -> std::sync::MutexGuard<'_, BTreeMap<WorkforceId, UnrelatedTarget>> {
+        self.unrelated_targets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, MachineFaults> {
@@ -285,6 +360,59 @@ mod tests {
     #[derive(Debug, thiserror::Error)]
     #[error("writing the log failed")]
     struct Wrapped(#[source] std::io::Error);
+
+    #[derive(Clone, Default)]
+    struct Logged(std::sync::Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Logged {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_unrelated_target_is_logged_once_for_each_branch_and_tip_and_kept_per_workforce() {
+        let commit = |byte: u8| -> CommitId {
+            let text: String = std::iter::repeat_n(format!("{byte:02x}"), 20).collect();
+            CommitId::Git(text.parse().unwrap())
+        };
+        let workforce = |bytes: &[u8]| WorkforceId::from(wf_core::id::EventId::of(bytes));
+        let (one, other) = (workforce(b"one"), workforce(b"other"));
+        let faults = Faults::default();
+        let logged = Logged::default();
+        let writer = logged.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            faults.note_unrelated_target(one, "main", commit(1), commit(2));
+            faults.note_unrelated_target(one, "main", commit(1), commit(2));
+            assert_eq!(
+                faults
+                    .current_in(one)
+                    .unrelated_target
+                    .map(|found| found.branch),
+                Some(commit(1))
+            );
+            assert_eq!(faults.current_in(other).unrelated_target, None);
+            faults.note_unrelated_target(one, "main", commit(3), commit(2));
+            faults.target_followed(one, "main");
+            faults.note_unrelated_target(one, "main", commit(3), commit(2));
+        });
+        let logged = String::from_utf8(logged.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(
+            logged.matches("has no history in common").count(),
+            3,
+            "{logged}"
+        );
+        let first = format!("main is at {}", commit(1));
+        assert_eq!(logged.matches(&first).count(), 1, "{logged}");
+    }
 
     #[test]
     fn a_full_disk_is_remembered_once_until_there_is_space() {

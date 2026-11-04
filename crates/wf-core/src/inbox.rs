@@ -64,7 +64,8 @@ pub struct Stale {
 
 /// The kind of an entry of the inbox: what waits in the state, on an item or as a push of the
 /// principal that lost a fork of the target; or what the daemon keeps: a permission request that
-/// an agent's session holds, or what is wrong with its machine.
+/// an agent's session holds, what is wrong with its machine, or a target branch that shares no
+/// history with the tip the log names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InboxKind {
@@ -76,6 +77,7 @@ pub enum InboxKind {
     Permission,
     MachineFault,
     LostPush,
+    UnrelatedTarget,
 }
 
 impl InboxKind {
@@ -90,6 +92,7 @@ impl InboxKind {
             InboxKind::Permission => "permission",
             InboxKind::MachineFault => "machine_fault",
             InboxKind::LostPush => "lost_push",
+            InboxKind::UnrelatedTarget => "unrelated_target",
         }
     }
 }

@@ -48,7 +48,9 @@ use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
 pub use data_dir::DataDir;
-pub use faults::{HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS, Retry};
+pub use faults::{
+    HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS, Retry, UnrelatedTarget,
+};
 pub use git_service::{FetchError, run_git_bridge};
 pub use open_files::raise_open_file_limit;
 pub use panics::{Panics, watch_panics};

@@ -1,7 +1,8 @@
 //! Keeping the target branch of `<wf>/git` where the log says it is (SPEC §10). A push of the
 //! principal is written as `TargetMoved` onto the tip the log names; the branch follows the end of
 //! the chain, forward or, after a move of this device lost a fork, back to the winner; and an item
-//! whose merge lost goes back to `review` to be merged again.
+//! whose merge lost goes back to `review` to be merged again. A branch that shares no history with
+//! the tip is none of these: it waits for the principal, who adopts it or puts it back.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Weak};
@@ -43,6 +44,9 @@ pub(super) enum TargetAt {
     /// Elsewhere: the tip is still to arrive, or a push was just written and the log has not
     /// settled on it. A merge waits.
     Elsewhere,
+    /// At `branch`, which shares no history with `tip`, the tip the log names. No pass changes
+    /// that: a merge waits for the principal.
+    Unrelated { branch: CommitId, tip: CommitId },
 }
 
 /// What a pass does with the target branch.
@@ -50,8 +54,11 @@ pub(super) enum TargetAt {
 enum Follow {
     /// It is where the log says, at `at`.
     Stays { at: CommitId },
-    /// It cannot follow yet: the tip has not arrived, or it is unrelated to the tip.
+    /// It cannot follow yet: the tip has not arrived.
     Waits,
+    /// It shares no history with the tip: rewritten, or not the repository it should be. It stays
+    /// where it is until the principal says.
+    Unrelated { branch: CommitId, tip: CommitId },
     /// The principal pushed: write the move.
     Record { commit: CommitId, onto: CommitId },
     /// Forward to the tip, or back to it from a move that lost a fork.
@@ -62,8 +69,8 @@ enum Follow {
 struct Reading {
     target: String,
     tip: Option<CommitId>,
-    /// Every commit a move of the target made, on the chain or not.
-    made: BTreeSet<CommitId>,
+    /// Every commit a move of the target left or made, on the chain or not.
+    been_at: BTreeSet<CommitId>,
     principal: Option<PrincipalKey>,
     /// The items whose merge lost a fork that this device sends back, with the commit it made.
     lost_merges: Vec<(ItemId, CommitId)>,
@@ -85,7 +92,10 @@ fn read(state: &State, own: DeviceKey, presence: &Presence, now_ms: u64) -> Opti
     Some(Reading {
         target: policy.merge.target.clone(),
         tip: state.target(),
-        made: state.target_moves().map(|step| step.commit).collect(),
+        been_at: state
+            .target_moves()
+            .flat_map(|step| [step.commit, step.onto])
+            .collect(),
         principal: state.principal_of(&own),
         lost_merges,
     })
@@ -106,7 +116,7 @@ fn decide(
         Some(tip) if tip == branch => Follow::Stays { at: tip },
         Some(tip) if !git.has_commit(tip)? => Follow::Waits,
         // A move of the log, or behind its tip: the branch goes to the tip, forward or back.
-        Some(tip) if reading.made.contains(&branch) || git.is_ancestor(branch, tip)? => {
+        Some(tip) if reading.been_at.contains(&branch) || git.is_ancestor(branch, tip)? => {
             Follow::Moves {
                 from: branch,
                 to: tip,
@@ -118,11 +128,11 @@ fn decide(
                 commit: branch,
                 onto,
             },
-            None => Follow::Waits,
+            None => Follow::Unrelated { branch, tip },
         },
         // No move named a tip yet: a push is one from where this daemon last saw the branch.
         None => match seen {
-            Some(seen) if seen != branch && !reading.made.contains(&branch) => Follow::Record {
+            Some(seen) if seen != branch && !reading.been_at.contains(&branch) => Follow::Record {
                 commit: branch,
                 onto: seen,
             },
@@ -206,7 +216,8 @@ pub(crate) async fn run_target(daemon: Weak<Daemon>, workforce: WorkforceId, loa
         if due || now != watched {
             watched = now;
             followed_from = match strong.follow_target(workforce, &loaded).await {
-                Ok(TargetAt::Tip { .. }) => branch,
+                // Only a change of the branch or of the log changes what a pass finds.
+                Ok(TargetAt::Tip { .. } | TargetAt::Unrelated { .. }) => branch,
                 Ok(TargetAt::Elsewhere) => None,
                 Err(error) => {
                     tracing::warn!(
@@ -242,7 +253,6 @@ impl Daemon {
         workforce: WorkforceId,
         loaded: &Loaded,
     ) -> Result<TargetAt, SessionError> {
-        let own = self.device();
         let Some(git) = self.open_bare_repository(workforce, loaded).await? else {
             return Ok(TargetAt::Elsewhere);
         };
@@ -250,22 +260,28 @@ impl Daemon {
         // A push written in the first round is settled by the log in the second.
         let mut at = TargetAt::Elsewhere;
         for _ in 0..2 {
-            let (presence, now_ms) = (self.presence_now(), wf_store::now_ms());
-            let reading = self
-                .read(loaded, move |state| read(state, own, &presence, now_ms))
-                .await?;
-            let Some(reading) = reading else {
+            let Some((follow, reading)) = self.look(loaded, &git, &mut seen).await? else {
                 return Ok(TargetAt::Elsewhere);
             };
-            let (pass_git, last) = (git.clone(), *seen);
-            let ((branch, follow), reading) =
-                blocking(move || Ok::<_, VcsError>((decide(&pass_git, &reading, last)?, reading)))
-                    .await??;
-            *seen = branch.or(*seen);
             self.send_back_lost_merges(loaded, &reading).await?;
+            match follow {
+                Follow::Stays { .. }
+                | Follow::Waits
+                | Follow::Record { .. }
+                | Follow::Moves { .. } => {
+                    self.faults.target_followed(workforce, &reading.target);
+                }
+                Follow::Unrelated { branch, tip } => {
+                    self.faults
+                        .note_unrelated_target(workforce, &reading.target, branch, tip);
+                }
+            }
             match follow {
                 Follow::Stays { at } => return Ok(TargetAt::Tip { at }),
                 Follow::Waits => return Ok(TargetAt::Elsewhere),
+                Follow::Unrelated { branch, tip } => {
+                    return Ok(TargetAt::Unrelated { branch, tip });
+                }
                 Follow::Moves { from, to } => {
                     let (git, target) = (git.clone(), reading.target.clone());
                     let moved = blocking(move || git.move_target(&target, from, to)).await??;
@@ -291,6 +307,65 @@ impl Daemon {
             }
         }
         Ok(at)
+    }
+
+    /// Reads the log and the branch, and works out what a pass does. `None` without a policy.
+    async fn look(
+        &self,
+        loaded: &Loaded,
+        git: &GitCli,
+        seen: &mut Option<CommitId>,
+    ) -> Result<Option<(Follow, Reading)>, SessionError> {
+        let own = self.device();
+        let (presence, now_ms) = (self.presence_now(), wf_store::now_ms());
+        let reading = self
+            .read(loaded, move |state| read(state, own, &presence, now_ms))
+            .await?;
+        let Some(reading) = reading else {
+            return Ok(None);
+        };
+        let (pass_git, last) = (git.clone(), *seen);
+        let ((branch, follow), reading) =
+            blocking(move || Ok::<_, VcsError>((decide(&pass_git, &reading, last)?, reading)))
+                .await??;
+        *seen = branch.or(*seen);
+        Ok(Some((follow, reading)))
+    }
+
+    /// The principal says that the target branch, unrelated to the tip the log names, is right:
+    /// writes it as a move from that tip. It must still be at `commit`, the one they looked at.
+    pub(crate) async fn adopt_target(
+        &self,
+        workforce: WorkforceId,
+        loaded: &Loaded,
+        commit: CommitId,
+    ) -> Result<(), SessionError> {
+        let Some(git) = self.open_bare_repository(workforce, loaded).await? else {
+            return Err(SessionError::TargetNotUnrelated);
+        };
+        let mut seen = loaded.target.seen.lock().await;
+        let Some((follow, reading)) = self.look(loaded, &git, &mut seen).await? else {
+            return Err(SessionError::NoPolicy);
+        };
+        let onto = match follow {
+            Follow::Unrelated { branch, tip } if branch == commit => tip,
+            Follow::Unrelated { branch, .. } => {
+                return Err(SessionError::TargetElsewhere { branch });
+            }
+            Follow::Stays { .. } | Follow::Waits | Follow::Record { .. } | Follow::Moves { .. } => {
+                return Err(SessionError::TargetNotUnrelated);
+            }
+        };
+        let principal = reading.principal.ok_or(SessionError::NotBound)?;
+        self.author(
+            loaded,
+            Actor::Daemon(principal),
+            EventBody::TargetMoved(TargetMoved { commit, onto }),
+        )
+        .await?;
+        drop(seen);
+        self.follow_target(workforce, loaded).await?;
+        Ok(())
     }
 
     /// Moves each item whose merge lost a fork back to `review`, if this device made it or its
@@ -339,7 +414,7 @@ mod tests {
     use wf_store::{RedbStore, Replica};
     use wf_vcs::testing::{TestRepository, git_in};
 
-    use super::super::merge::Claiming;
+    use super::super::merge::{Attempt, Claiming, MergeRequest};
     use super::*;
     use crate::{DataDir, Launch};
 
@@ -422,6 +497,85 @@ mod tests {
             self.fetch(branch, "refs/heads/main");
         }
 
+        /// A commit with the tree of `main` and no history, as a rewrite of the root leaves: in
+        /// `<wf>/git`, without moving `main`.
+        fn rewritten(&self) -> CommitId {
+            let bare = self.bare();
+            let commit = git_in(
+                &bare,
+                &[
+                    "-c",
+                    "user.name=principal",
+                    "-c",
+                    "user.email=principal@example.com",
+                    "commit-tree",
+                    "main^{tree}",
+                    "-m",
+                    "rewritten",
+                ],
+            );
+            git_in(&bare, &["update-ref", "refs/test/rewritten", &commit]);
+            CommitId::Git(commit.parse().unwrap())
+        }
+
+        /// `main` of `<wf>/git` rewritten by a direct write of the ref, as no push can.
+        fn rewrite(&self) -> CommitId {
+            let rewritten = self.rewritten();
+            let bare = self.bare();
+            git_in(
+                &bare,
+                &["update-ref", "refs/heads/main", &rewritten.to_string()],
+            );
+            rewritten
+        }
+
+        /// An item in `review` with work submitted at `reviewed`.
+        async fn submitted(&mut self, reviewed: CommitId) -> (ItemId, wf_core::id::SessionId) {
+            let founder = self.fixture.founder_actor();
+            self.write(0, founder.clone(), define_agent("coder")).await;
+            let item: ItemId = self
+                .write(0, founder.clone(), create("task", "work"))
+                .await
+                .id()
+                .into();
+            let session = self
+                .write(0, founder.clone(), start_session("coder", item))
+                .await
+                .id()
+                .into();
+            self.write(0, founder.clone(), moved(item, ItemState::Review))
+                .await;
+            self.write(0, founder, submit_session(session, reviewed))
+                .await;
+            (item, session)
+        }
+
+        async fn adopt(&self, commit: CommitId) -> Result<(), SessionError> {
+            self.daemon
+                .adopt_target(self.fixture.workforce(), &self.loaded, commit)
+                .await
+        }
+
+        fn unrelated(&self) -> Option<crate::UnrelatedTarget> {
+            self.daemon
+                .faults
+                .current_in(self.fixture.workforce())
+                .unrelated_target
+        }
+
+        /// Waits for what the dispatcher does to the item to show in the state.
+        async fn wait_for(&self, what: &str, done: impl Fn(&State) -> bool) -> State {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let state = self.state().await;
+                if done(&state) {
+                    return state;
+                }
+                assert!(tokio::time::Instant::now() < deadline, "{what}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+
         fn main(&self) -> CommitId {
             GitCli::open(&self.bare())
                 .unwrap()
@@ -474,7 +628,7 @@ mod tests {
                 .unwrap()
             {
                 TargetAt::Tip { at } => Some(at),
-                TargetAt::Elsewhere => None,
+                TargetAt::Elsewhere | TargetAt::Unrelated { .. } => None,
             }
         }
 
@@ -534,6 +688,258 @@ mod tests {
             .await
             .expect("the push is written");
         assert_eq!(scene.state().await.target_tip().unwrap().onto, main);
+    }
+
+    #[tokio::test]
+    async fn a_target_rewritten_past_the_tip_stays_there_and_is_reported_once() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        assert_eq!(scene.follow().await, Some(main));
+        let rewritten = scene.rewrite();
+
+        let pass = scene
+            .daemon
+            .follow_target(scene.fixture.workforce(), &scene.loaded)
+            .await
+            .unwrap();
+        assert_eq!(
+            pass,
+            TargetAt::Unrelated {
+                branch: rewritten,
+                tip: main
+            }
+        );
+        let found = scene.unrelated().expect("the daemon keeps it");
+        assert_eq!((found.branch, found.tip), (rewritten, main));
+        assert_eq!(scene.main(), rewritten, "the branch is not put back");
+        assert_eq!(scene.state().await.target(), Some(main), "nothing written");
+
+        assert_eq!(scene.follow().await, None);
+        assert_eq!(
+            scene.unrelated(),
+            Some(found),
+            "the same one, not a new one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_target_put_back_at_the_tip_is_no_longer_unrelated() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        scene.rewrite();
+        assert_eq!(scene.follow().await, None);
+
+        git_in(
+            &scene.bare(),
+            &["update-ref", "refs/heads/main", &main.to_string()],
+        );
+        assert_eq!(scene.follow().await, Some(main));
+        assert_eq!(scene.unrelated(), None);
+    }
+
+    #[tokio::test]
+    async fn an_adopted_rewrite_is_written_onto_the_tip_and_the_chain_goes_on_from_it() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        let rewritten = scene.rewrite();
+        assert_eq!(scene.follow().await, None);
+
+        scene.adopt(rewritten).await.unwrap();
+        let state = scene.state().await;
+        assert_eq!(state.target(), Some(rewritten));
+        let tip = state.target_tip().unwrap();
+        assert_eq!((tip.onto, tip.cause), (main, MoveCause::Push));
+        assert_eq!(scene.unrelated(), None);
+        assert_eq!(scene.follow().await, Some(rewritten));
+        assert_eq!(
+            scene.state().await.target_moves().count(),
+            2,
+            "written once"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_commit_the_target_is_at_can_be_adopted_and_only_while_it_is_unrelated() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        assert!(matches!(
+            scene.adopt(main).await,
+            Err(SessionError::TargetNotUnrelated)
+        ));
+
+        let rewritten = scene.rewrite();
+        let another = scene.commit("another");
+        match scene.adopt(another).await {
+            Err(SessionError::TargetElsewhere { branch }) => assert_eq!(branch, rewritten),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(scene.state().await.target(), Some(main));
+    }
+
+    /// The other device has the old history: its branch goes to the rewrite by compare-and-swap,
+    /// like any tip, and nothing there asks the principal again.
+    #[tokio::test]
+    async fn a_device_on_the_old_tip_follows_a_rewrite_adopted_elsewhere() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        assert_eq!(scene.follow().await, Some(main));
+        let rewritten = scene.rewritten();
+        let actor = scene.daemon_actor();
+        scene.write(1, actor, target_moved(rewritten, main)).await;
+
+        assert_eq!(scene.follow().await, Some(rewritten));
+        assert_eq!(scene.main(), rewritten);
+        assert_eq!(scene.unrelated(), None);
+        assert_eq!(scene.state().await.target_moves().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_device_behind_the_old_tip_follows_a_rewrite_adopted_elsewhere() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        // Where the first move of the log started, which no move made.
+        scene.fetch("before", "refs/heads/main");
+        let rewritten = scene.rewritten();
+        let actor = scene.daemon_actor();
+        scene.write(1, actor, target_moved(rewritten, main)).await;
+
+        assert_eq!(scene.follow().await, Some(rewritten));
+        assert_eq!(scene.main(), rewritten);
+    }
+
+    /// A merge of another device that crossed the rewrite wins or loses like any fork. When it
+    /// wins, the branch goes back to the old history, and the push that lost says so.
+    #[tokio::test]
+    async fn an_adopted_rewrite_that_lost_a_fork_is_a_lost_push() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        let winner = scene.commit("winner");
+        let apart = scene.written_apart(&scene.state().await, target_moved(winner, main));
+        let rewritten = scene.rewrite();
+        scene.adopt(rewritten).await.unwrap();
+
+        scene.receive(apart).await;
+        assert_eq!(scene.follow().await, Some(winner));
+        assert_eq!(scene.main(), winner);
+        let lost: Vec<_> = scene
+            .state()
+            .await
+            .lost_pushes(scene.fixture.founder.key())
+            .iter()
+            .map(|push| push.commit)
+            .collect();
+        assert_eq!(lost, [rewritten]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_merge_on_an_unrelated_target_claims_nothing_and_starts_once_it_is_adopted() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        let rewritten = scene.rewrite();
+        let bare = scene.bare();
+        // Submitted on the rewritten history, as the sessions after the rewrite are.
+        let reviewed = git_in(
+            &bare,
+            &[
+                "-c",
+                "user.name=agent",
+                "-c",
+                "user.email=agent@example.com",
+                "commit-tree",
+                "main^{tree}",
+                "-p",
+                "main",
+                "-m",
+                "work",
+            ],
+        );
+        git_in(&bare, &["update-ref", "refs/test/reviewed", &reviewed]);
+        let reviewed = CommitId::Git(reviewed.parse().unwrap());
+        let (item, session) = scene.submitted(reviewed).await;
+
+        scene
+            .daemon
+            .merge_item(
+                scene.fixture.workforce(),
+                &scene.loaded,
+                MergeRequest {
+                    item,
+                    commit: reviewed,
+                    because: None,
+                    attempt: Attempt::First { session },
+                },
+            )
+            .await
+            .unwrap();
+        let state = scene.state().await;
+        let Some(wf_core::item::ItemEntry::Live(live)) = state.item(item) else {
+            panic!("the item is live");
+        };
+        assert_eq!(live.merge_claims().count(), 0, "a merge that cannot start");
+        assert_eq!(live.state(), ItemState::Review);
+        assert_eq!(
+            live.comments().len(),
+            1,
+            "the session that did the work hears"
+        );
+        assert_eq!(state.target(), Some(main));
+
+        scene.adopt(rewritten).await.unwrap();
+        let state = scene
+            .wait_for("the dispatcher merges it", |state| {
+                state.live_state(item) == Some(ItemState::Done)
+            })
+            .await;
+        let tip = state.target_tip().unwrap();
+        assert_eq!(
+            (tip.onto, tip.cause),
+            (rewritten, MoveCause::Merge { item }),
+            "the merge went onto the rewrite"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn work_on_the_old_history_goes_back_to_a_session_once_the_rewrite_is_adopted() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        let reviewed = scene.commit("reviewed");
+        let rewritten = scene.rewrite();
+        assert_eq!(scene.follow().await, None);
+        scene.adopt(rewritten).await.unwrap();
+
+        let (item, _) = scene.submitted(reviewed).await;
+        let state = scene
+            .wait_for("the dispatcher sends it back", |state| {
+                state.live_state(item) == Some(ItemState::Open)
+            })
+            .await;
+        let Some(wf_core::item::ItemEntry::Live(live)) = state.item(item) else {
+            panic!("the item is live");
+        };
+        assert_eq!(live.merges().count(), 0);
+        assert_eq!(live.comments().len(), 1, "it says why");
+        let comment = *live.comments().keys().next().unwrap();
+        let said = scene
+            .loaded
+            .storage
+            .with(move |replica| {
+                wf_store::EventStore::event(replica.store(), &wf_core::id::EventId::from(comment))
+                    .unwrap()
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        let EventBody::Commented(said) = said.content.body else {
+            panic!("a comment");
+        };
+        assert!(
+            said.text
+                .contains(&format!("`git rebase --onto {rewritten} ")),
+            "an agent repository has no ref for the target: {}",
+            said.text
+        );
+        assert_eq!(state.target(), Some(rewritten));
+        assert_ne!(main, rewritten);
     }
 
     #[tokio::test]

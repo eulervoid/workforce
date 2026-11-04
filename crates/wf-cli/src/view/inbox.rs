@@ -8,7 +8,7 @@ use wf_core::session::HarnessFault;
 use wf_core::state::State;
 use wf_core::target::TargetMove;
 use wf_daemon::proto::HeldPermission;
-use wf_daemon::{MachineFaults, Retry};
+use wf_daemon::{MachineFaults, Retry, UnrelatedTarget};
 
 #[derive(Serialize)]
 pub struct InboxEntryView {
@@ -62,6 +62,12 @@ pub fn inbox_views(
         }
     }));
     entries.extend(machine_fault_views(machine_faults));
+    entries.extend(
+        machine_faults
+            .unrelated_target
+            .iter()
+            .map(|unrelated| unrelated_target_view(state, unrelated)),
+    );
     entries
 }
 
@@ -75,6 +81,12 @@ pub fn inbox_count(
     state.inbox().len() + lost_pushes(state, own).len() + held.len() + machine_faults.count()
 }
 
+fn target_name(state: &State) -> &str {
+    state.policy().map_or("the target", |document| {
+        document.policy.merge.target.as_str()
+    })
+}
+
 /// The pushes of the principal of `own` that lost a fork of the target.
 pub fn lost_pushes(state: &State, own: DeviceKey) -> Vec<TargetMove> {
     state
@@ -85,9 +97,7 @@ pub fn lost_pushes(state: &State, own: DeviceKey) -> Vec<TargetMove> {
 /// The entry for a push that lost a fork of the target: another device moved it from the same
 /// commit first, so the pushed commit is not in it.
 pub fn lost_push_view(state: &State, push: &TargetMove) -> InboxEntryView {
-    let target = state.policy().map_or("the target", |document| {
-        document.policy.merge.target.as_str()
-    });
+    let target = target_name(state);
     InboxEntryView {
         kind: InboxKind::LostPush,
         item: None,
@@ -98,6 +108,26 @@ pub fn lost_push_view(state: &State, push: &TargetMove) -> InboxEntryView {
              device moved {target} from {} before the push from {}",
             push.onto.short(),
             super::device_name(state, push.device)
+        ),
+        passed: Vec::new(),
+    }
+}
+
+/// The entry for a target branch that shares no history with the tip the log names: no merge
+/// starts until the principal says which is right.
+pub fn unrelated_target_view(state: &State, unrelated: &UnrelatedTarget) -> InboxEntryView {
+    let target = target_name(state);
+    let (branch, tip) = (unrelated.branch.short(), unrelated.tip.short());
+    InboxEntryView {
+        kind: InboxKind::UnrelatedTarget,
+        item: None,
+        session: None,
+        title: format!("{target} has no history in common with the log"),
+        what: format!(
+            "no merge starts: {target} of wf's repository is at {branch}, the log says {tip}, and \
+             they share no history. If it was rewritten on purpose, `wf target adopt {branch}`; \
+             if not, put it back: `git -C <wf>/git update-ref refs/heads/{target} {tip}`. Since {}",
+            timestamp(unrelated.since_ms)
         ),
         passed: Vec::new(),
     }

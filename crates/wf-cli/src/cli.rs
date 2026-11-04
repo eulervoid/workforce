@@ -38,7 +38,7 @@ pub struct Cli {
 /// subcommands in one flat block.
 const COMMAND_GROUPS: &[&[&str]] = &[
     &[
-        "init", "status", "policy", "log", "stats", "export", "import", "members", "fork",
+        "init", "status", "policy", "log", "stats", "export", "import", "members", "fork", "target",
     ],
     &["item", "comment", "mentions", "review", "check", "inbox"],
     &["agent", "harness", "session", "work", "permissions"],
@@ -148,6 +148,9 @@ pub enum Command {
     /// The agent harnesses this machine can start.
     #[command(subcommand)]
     Harness(HarnessCommand),
+    /// The target branch in wf's repository.
+    #[command(subcommand)]
+    Target(TargetCommand),
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
     /// Start, stop or run the background process of this machine.
@@ -228,6 +231,19 @@ pub enum PermissionsCommand {
         /// A shell command the request asks to run.
         #[arg(long)]
         command: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum TargetCommand {
+    /// Take a rewritten target branch as the target.
+    ///
+    /// For when the target in wf's repository shares no history with the tip the log names, and
+    /// no merge starts: `wf inbox` names both. The log then goes on from the rewritten branch,
+    /// and the other devices move their target to it.
+    Adopt {
+        /// The commit the branch is at, as `wf inbox` names it.
+        commit: String,
     },
 }
 

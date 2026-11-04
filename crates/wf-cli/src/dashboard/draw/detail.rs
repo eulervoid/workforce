@@ -239,7 +239,8 @@ pub(super) fn draw_session(
             | InboxEntry::Review { .. }
             | InboxEntry::Notice { .. }
             | InboxEntry::MachineFault { .. }
-            | InboxEntry::LostPush { .. } => None,
+            | InboxEntry::LostPush { .. }
+            | InboxEntry::UnrelatedTarget { .. } => None,
         })
         .collect();
     let transcript = app.transcripts.get(&session.id);

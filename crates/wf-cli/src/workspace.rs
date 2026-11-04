@@ -11,7 +11,6 @@ use wf_core::identity::{Actor, AgentId, DeviceKey, DeviceSigner, PrincipalKey, P
 use wf_core::lifecycle::Finish;
 use wf_core::session::CommitId;
 use wf_core::state::State;
-use wf_daemon::MachineFaults;
 use wf_daemon::caches::CacheUsage;
 use wf_daemon::caller::Caller;
 use wf_daemon::client::{ClientError, DaemonClient};
@@ -19,6 +18,7 @@ use wf_daemon::data_dir::DataDirError;
 use wf_daemon::proto::{
     ChangesDiff, EndAnswer, HeldPermission, LiveDiff, ProtoError, SnapshotDiff, TranscriptCopy,
 };
+use wf_daemon::{MachineFaults, UnrelatedTarget};
 use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
 
@@ -626,6 +626,23 @@ impl Workspace {
         let workforce = self.workforce;
         let (client, _) = self.daemon("ask for the target")?;
         Ok(client.target_commit(workforce)?)
+    }
+
+    /// Where the daemon found the target off the log. Only the daemon looks at `<wf>/git`, so
+    /// without one nobody can say.
+    pub fn unrelated_target(&mut self) -> anyhow::Result<Option<UnrelatedTarget>> {
+        let workforce = self.workforce;
+        let (client, _) = self.daemon("adopt a rewritten target")?;
+        Ok(client.machine_faults(workforce)?.unrelated_target)
+    }
+
+    /// Takes the target branch, at `commit` and unrelated to the tip the log names, as the target.
+    pub fn adopt_target(&mut self, commit: CommitId) -> anyhow::Result<()> {
+        let workforce = self.workforce;
+        let (client, state) = self.daemon("adopt a rewritten target")?;
+        client.adopt_target(workforce, commit)?;
+        *state = client.state(workforce)?;
+        Ok(())
     }
 
     /// Stops a session that runs in the daemon now.

@@ -52,6 +52,8 @@ pub struct StatusView {
     pub caches: Option<CacheUsage>,
     /// What this device waits for before a session, a review or a merge can start, one line each.
     pub awaiting_commits: Vec<String>,
+    /// That the target of wf's repository shares no history with the tip the log names.
+    pub unrelated_target: Option<String>,
     /// How the target branch of the principal's checkout differs from wf's, if it does.
     pub checkout_target: Option<CheckoutTarget>,
 }
@@ -751,6 +753,10 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
         refolded,
         caches,
         awaiting_commits: awaiting_lines(state, awaited),
+        unrelated_target: machine_faults
+            .unrelated_target
+            .as_ref()
+            .map(|unrelated| super::unrelated_target_view(state, unrelated).what),
         checkout_target,
     }
 }

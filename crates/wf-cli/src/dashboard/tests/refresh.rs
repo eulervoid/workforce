@@ -108,7 +108,7 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
 {
     use crate::dashboard::snapshot::{Sources, Wanted};
     use wf_core::testing::*;
-    use wf_daemon::{HarnessAtFault, MachineFaults, OutOfSpace};
+    use wf_daemon::{HarnessAtFault, MachineFaults, OutOfSpace, UnrelatedTarget};
 
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
@@ -142,7 +142,13 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
             .unwrap();
         events.push(event);
     }
+    let unrelated_target = UnrelatedTarget {
+        branch: commit(21),
+        tip: commit(11),
+        since_ms: 1_000,
+    };
     let faults = MachineFaults {
+        unrelated_target: Some(unrelated_target),
         out_of_space: Some(OutOfSpace {
             since_ms: 1_000,
             what: "the event log".to_owned(),
@@ -179,7 +185,11 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
         in_inbox,
         "the count is of the entries"
     );
-    assert_eq!(snapshot.waiting.len(), 4);
+    assert_eq!(snapshot.waiting.len(), 5);
+    assert!(snapshot.waiting.iter().any(|entry| matches!(
+        entry,
+        InboxEntry::UnrelatedTarget { branch, .. } if *branch == commit(21)
+    )));
     let lost: Vec<_> = snapshot
         .waiting
         .iter()

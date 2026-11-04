@@ -411,7 +411,8 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
             InboxEntry::Review { .. } => &[REVIEW, DIFF],
             InboxEntry::Notice { .. }
             | InboxEntry::MachineFault { .. }
-            | InboxEntry::LostPush { .. } => &[],
+            | InboxEntry::LostPush { .. }
+            | InboxEntry::UnrelatedTarget { .. } => &[],
         };
         for key in keys {
             if !acts.contains(key) {

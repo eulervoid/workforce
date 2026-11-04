@@ -250,8 +250,10 @@ impl Daemon {
                 )
                 .await?
             }
-            // Nothing is left to merge, or the merge conflicts: the merge tells.
-            MergeTree::Landed { .. } | MergeTree::Conflict { .. } => Vec::new(),
+            // Nothing is left to merge, or the merge cannot be made: the merge tells.
+            MergeTree::Landed { .. } | MergeTree::Conflict { .. } | MergeTree::Unrelated => {
+                Vec::new()
+            }
         };
         let (by_work, not_by_work): (Vec<_>, Vec<_>) = failed
             .into_iter()

@@ -175,6 +175,12 @@ pub enum InboxEntry {
         title: String,
         what: String,
     },
+    /// The target branch shares no history with the tip of the log, and what to do about it.
+    UnrelatedTarget {
+        branch: CommitId,
+        title: String,
+        what: String,
+    },
 }
 
 /// What tells an entry that waits apart from the others, across refreshes.
@@ -192,6 +198,7 @@ pub enum InboxKey {
     /// The title tells machine faults apart: the machine has one of each.
     MachineFault(String),
     LostPush(CommitId),
+    UnrelatedTarget(CommitId),
 }
 
 impl InboxEntry {
@@ -214,6 +221,7 @@ impl InboxEntry {
             },
             InboxEntry::MachineFault { title, .. } => InboxKey::MachineFault(title.clone()),
             InboxEntry::LostPush { commit, .. } => InboxKey::LostPush(*commit),
+            InboxEntry::UnrelatedTarget { branch, .. } => InboxKey::UnrelatedTarget(*branch),
         }
     }
 }
@@ -560,6 +568,14 @@ fn waiting(
             .into_iter()
             .map(|(title, notice)| InboxEntry::MachineFault { title, notice }),
     );
+    waiting.extend(machine_faults.unrelated_target.iter().map(|unrelated| {
+        let view = view::unrelated_target_view(state, unrelated);
+        InboxEntry::UnrelatedTarget {
+            branch: unrelated.branch,
+            title: view.title,
+            what: view.what,
+        }
+    }));
     waiting
 }
 
@@ -855,7 +871,8 @@ impl InboxEntry {
             | InboxEntry::Review { .. }
             | InboxEntry::Notice { .. }
             | InboxEntry::MachineFault { .. }
-            | InboxEntry::LostPush { .. } => None,
+            | InboxEntry::LostPush { .. }
+            | InboxEntry::UnrelatedTarget { .. } => None,
         }
     }
 
@@ -867,7 +884,8 @@ impl InboxEntry {
             | InboxEntry::Blocker { .. }
             | InboxEntry::Notice { .. }
             | InboxEntry::MachineFault { .. }
-            | InboxEntry::LostPush { .. } => None,
+            | InboxEntry::LostPush { .. }
+            | InboxEntry::UnrelatedTarget { .. } => None,
         }
     }
 
@@ -893,7 +911,8 @@ impl InboxEntry {
             | InboxEntry::Review { .. }
             | InboxEntry::Notice { .. }
             | InboxEntry::MachineFault { .. }
-            | InboxEntry::LostPush { .. } => None,
+            | InboxEntry::LostPush { .. }
+            | InboxEntry::UnrelatedTarget { .. } => None,
         }
     }
 }
