@@ -3,7 +3,8 @@
 //!
 //! Each tool call is one block, printed once it is finished, that holds the call, the answer to
 //! its permission request and its result. A call still open when the reader catches up shows as a
-//! running line first.
+//! running line first, and again when what that line says changes: an agent often names its command
+//! only after the call started.
 
 use std::collections::HashMap;
 
@@ -12,7 +13,7 @@ use jiff::{SignedDuration, Timestamp};
 use wf_harness::TranscriptEntry;
 
 use super::layout::Spacing;
-use super::{Asked, Block, Format, Layout, Transcript, Verbosity};
+use super::{Block, Format, Layout, Transcript, Verbosity};
 
 /// How long agent text may wait for the rest of its paragraph before it is printed anyway.
 const STALL: SignedDuration = SignedDuration::from_secs(1);
@@ -24,13 +25,6 @@ pub enum Session {
     Ended,
 }
 
-/// The running line of an open call that went out last, so each state is shown once.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Shown {
-    WaitingForPermission,
-    Running,
-}
-
 pub struct Printer {
     transcript: Transcript,
     layout: Layout,
@@ -40,7 +34,8 @@ pub struct Printer {
     /// The open paragraph that was printed in part because it waited too long, and how many bytes
     /// of it.
     printed_prose: Option<(usize, usize)>,
-    shown: HashMap<String, Shown>,
+    /// The running line of each open call as it went out last, so each is shown once.
+    shown: HashMap<String, String>,
 }
 
 impl Printer {
@@ -159,20 +154,19 @@ impl Printer {
         out
     }
 
-    /// A running line for each open call whose state has not been shown yet.
+    /// A running line for each open call that says something new.
     fn open_calls(&mut self) -> String {
         let mut out = String::new();
         for call in self.transcript.open_calls() {
-            let state = match call.asked {
-                Asked::Waiting => Shown::WaitingForPermission,
-                Asked::Not | Asked::Answered(_) => Shown::Running,
-            };
-            if self.shown.insert(call.id.clone(), state) == Some(state) {
+            // An append-only line cannot tick, so it says nothing of how long the call has run.
+            let running = self.layout.running(call, None);
+            if self.shown.get(&call.id) == Some(&running) {
                 continue;
             }
             out.push_str(self.last.before(Spacing::Tool));
-            out.push_str(&self.layout.running(call));
+            out.push_str(&running);
             self.last = Spacing::Tool;
+            self.shown.insert(call.id.clone(), running);
         }
         out
     }
@@ -319,6 +313,33 @@ mod tests {
                 .trim_end()
                 .ends_with("waiting for permission")
         );
+    }
+
+    /// The agent opens a call of Bash before it wrote the command, as `Terminal`, and names it
+    /// seconds later.
+    #[test]
+    fn an_open_call_shows_again_once_the_agent_names_its_command() {
+        let mut renderer = renderer(Format::Raw, Verbosity::Abridged, 80);
+        renderer.render(&update(
+            0,
+            serde_json::json!({"sessionUpdate": "tool_call", "toolCallId": "1", "name": "Bash", "title": "Terminal", "kind": "execute", "status": "pending"}),
+        ));
+        assert!(renderer.caught_up(at(0)).contains("Bash  Terminal"));
+        renderer.render(&update(
+            3,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "1", "title": "cargo test --workspace"}),
+        ));
+        assert!(
+            renderer
+                .caught_up(at(3))
+                .contains("Bash  cargo test --workspace")
+        );
+        // A progress beat of the same call says nothing new.
+        renderer.render(&update(
+            33,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "1", "status": "in_progress"}),
+        ));
+        assert_eq!(renderer.caught_up(at(33)), "");
     }
 
     #[test]

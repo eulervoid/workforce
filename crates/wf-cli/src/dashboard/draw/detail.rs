@@ -1,5 +1,6 @@
 //! The detail opened from a list, and the log.
 
+use jiff::Timestamp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -199,7 +200,22 @@ pub(super) fn draw_session(
         .and(app.transcript_lines.get(&session.id));
     let mut open = match (app.transcripts.get(&session.id), laid_out) {
         (None, _) => vec![dimmed(no_transcript(&session.place, copy))],
-        (Some(transcript), Some(laid_out)) => laid_out.open_lines(transcript),
+        (Some(transcript), Some(laid_out)) => {
+            // A call left open when its session ended does not run on.
+            let now = match session.status {
+                SessionStatus::Live | SessionStatus::Parked => {
+                    let now_ms = i64::try_from(app.snapshot.now_ms).unwrap_or(i64::MAX);
+                    Some(Timestamp::from_millisecond(now_ms).unwrap_or(Timestamp::MAX))
+                }
+                SessionStatus::Ended { .. } => None,
+            };
+            let mut open = laid_out.open_lines(transcript, now);
+            // The scroll position goes on the last row, where it would cover the state of a call.
+            if !transcript.open_calls().is_empty() {
+                open.push(Line::default());
+            }
+            open
+        }
         (Some(_), None) => Vec::new(),
     };
     if let (Place::Elsewhere(device), Some(copy), Some(_)) =

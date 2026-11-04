@@ -2,6 +2,7 @@
 
 use super::support::*;
 use crate::theme;
+use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::style::Style;
@@ -124,7 +125,11 @@ fn laid_out_at_once(
         );
     }
     for call in transcript.open_calls() {
-        add(Spacing::Tool, Spacing::Tool, layout.running(call));
+        add(
+            Spacing::Tool,
+            Spacing::Tool,
+            layout.running(call, Some(Timestamp::UNIX_EPOCH)),
+        );
     }
     out.into_text().unwrap().lines
 }
@@ -158,7 +163,7 @@ fn the_kept_lines_of_a_transcript_are_those_of_laying_it_out_at_once() {
     };
     let assert_same = |lines: &TranscriptLines, transcript: &Transcript, width| {
         let mut kept = lines.lines().to_vec();
-        kept.extend(lines.open_lines(transcript));
+        kept.extend(lines.open_lines(transcript, Some(Timestamp::UNIX_EPOCH)));
         let at_once = laid_out_at_once(&layout(width), transcript);
         assert_eq!(kept.len(), at_once.len());
         assert_eq!(drawn(kept, width), drawn(at_once, width));

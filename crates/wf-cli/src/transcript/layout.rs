@@ -179,17 +179,23 @@ impl Layout {
         }
     }
 
-    /// The line of a call that is still open: running, or waiting for its permission request to
-    /// be answered.
-    pub fn running(&self, call: &ToolCall) -> String {
-        let right = match call.asked {
-            Asked::Waiting => "waiting for permission",
-            Asked::Not | Asked::Answered(_) => "running",
+    /// What shows of a call that is still open: running, or waiting for its permission request to
+    /// be answered. It has no entry to open yet, so its whole command shows, abridged in the
+    /// middle: agents often run what takes long, such as tests, on its last lines. With `now`,
+    /// which only a reader that redraws can give, it says for how long it has been running.
+    pub fn running(&self, call: &ToolCall, now: Option<Timestamp>) -> String {
+        let right = match (&call.asked, now) {
+            (Asked::Waiting, _) => "waiting for permission".to_owned(),
+            (Asked::Not | Asked::Answered(_), Some(now)) => {
+                format!("running {}", duration(now.duration_since(call.since)))
+            }
+            (Asked::Not | Asked::Answered(_), None) => "running".to_owned(),
         };
         let mut out = self.call_header(
             call,
+            CallState::Open,
             ("…", theme::text_dimmed()),
-            right,
+            &right,
             theme::text_dimmed(),
         );
         out.push_str(&self.reason(call));
@@ -280,13 +286,16 @@ impl Layout {
                 }
                 Line::Hidden(count) => {
                     out.push_str(&left);
-                    let text = format!("… {count} lines hidden");
-                    out.push_str(&self.styled(&text, theme::text_dimmed()));
+                    out.push_str(&self.hidden(count));
                 }
             }
             out.push('\n');
         }
         out
+    }
+
+    fn hidden(&self, count: usize) -> String {
+        self.styled(&format!("… {count} lines hidden"), theme::text_dimmed())
     }
 
     fn time(&self, at: Timestamp) -> String {
@@ -608,6 +617,7 @@ impl Layout {
     fn call_header(
         &self,
         call: &ToolCall,
+        state: CallState,
         (glyph, glyph_style): (&str, Style),
         right: &str,
         right_style: Style,
@@ -637,15 +647,17 @@ impl Layout {
             .map(|text| display_width(text) + 2)
             .sum::<usize>();
         let room = self.width.saturating_sub(indent + reserved).max(10);
-        let mut lines = match self.verbosity {
-            Verbosity::Abridged => {
+        let mut lines = match (state, self.verbosity) {
+            (CallState::Finished, Verbosity::Abridged) => {
                 let first = match summary.lines().nth(1) {
                     Some(_) => format!("{} …", first_line(&summary)),
                     None => summary.clone(),
                 };
                 vec![cut(&first, room)]
             }
-            Verbosity::Full => self.wrap_under(&summary, indent, reserved),
+            (CallState::Open, _) | (CallState::Finished, Verbosity::Full) => {
+                self.wrap_under(&summary, indent, reserved)
+            }
         }
         .into_iter();
         let first = lines.next().unwrap_or_default();
@@ -666,8 +678,13 @@ impl Layout {
             left_width += 2 + display_width(&suffix);
         }
         let mut out = self.spread(&left, left_width, right, right_style);
-        for line in lines {
-            out.push_str(&format!("{}{line}\n", " ".repeat(indent)));
+        for line in self.abridged(lines.collect()) {
+            out.push_str(&" ".repeat(indent));
+            match line {
+                Line::Text(text) => out.push_str(&text),
+                Line::Hidden(count) => out.push_str(&self.hidden(count)),
+            }
+            out.push('\n');
         }
         out
     }
@@ -764,7 +781,7 @@ impl Layout {
                 theme::text_dimmed(),
             ),
         };
-        let mut out = self.call_header(call, glyph, &state, style);
+        let mut out = self.call_header(call, CallState::Finished, glyph, &state, style);
         out.push_str(&self.reason(call));
         let failed = matches!(outcome, Outcome::Failed(_));
         let diffs = call
@@ -851,6 +868,13 @@ pub fn call_line(call: &ToolCall) -> String {
         &call.name
     };
     format!("{name}  {}", first_line(&summary(call, name)))
+}
+
+/// Whether a call is still open, which decides how much of its command its header shows.
+#[derive(Clone, Copy)]
+enum CallState {
+    Open,
+    Finished,
 }
 
 #[derive(Clone, Copy)]

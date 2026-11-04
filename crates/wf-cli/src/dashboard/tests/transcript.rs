@@ -153,3 +153,77 @@ fn a_click_on_the_first_line_of_an_entry_opens_it() {
     assert!(!shown.contains("second 15"), "{shown}");
     assert!(line_with(&mut app, "print second").contains('▎'));
 }
+
+/// The coder's session, with a call of Bash open since second 10 whose command is `title`.
+fn app_with_open_call(title: &str) -> App {
+    let mut app = transcript_app();
+    let coder = app.snapshot.working[0].clone();
+    app.transcribed(
+        coder.id,
+        &[
+            update(
+                10,
+                json!({"sessionUpdate": "tool_call", "toolCallId": "3", "name": "Bash", "title": "Terminal", "kind": "execute", "status": "pending"}),
+            ),
+            update(
+                13,
+                json!({"sessionUpdate": "tool_call_update", "toolCallId": "3", "title": title}),
+            ),
+        ],
+    );
+    app
+}
+
+/// Agents edit first and run the tests on the last line of one long command.
+#[test]
+fn an_open_call_shows_the_end_of_its_command() {
+    let script: String = (1..=30).map(|line| format!("edit {line}\n")).collect();
+    let mut app = app_with_open_call(&format!("python3 - <<'E'\n{script}E\ncargo test -p wf-cli"));
+    let shown = tall(&mut app);
+    assert!(shown.contains("python3 - <<'E'"), "{shown}");
+    assert!(shown.contains("cargo test -p wf-cli"), "{shown}");
+    assert!(shown.contains("lines hidden"), "{shown}");
+    assert!(!shown.contains("edit 15"), "abridged: {shown}");
+}
+
+#[test]
+fn a_long_command_shown_wraps_instead_of_being_cut_while_it_runs() {
+    let mut app = app_with_open_call(&format!("{} && cargo test", "x".repeat(100)));
+    let shown = tall(&mut app);
+    assert!(shown.contains("cargo test"), "{shown}");
+}
+
+#[test]
+fn an_open_call_says_how_long_it_has_been_running() {
+    let mut app = app_with_open_call("cargo test");
+    app.tick(100_000);
+    assert!(
+        line_with(&mut app, "cargo test").contains("running 1m"),
+        "90 seconds in"
+    );
+}
+
+#[test]
+fn the_scroll_position_leaves_the_state_of_an_open_call_alone() {
+    let mut app = app_with_open_call("cargo test");
+    app.tick(100_000);
+    let shown = screen(&mut app, 80, 20);
+    assert!(shown.contains("running 1m"), "{shown}");
+    assert!(shown.contains(" 100% "), "{shown}");
+}
+
+#[test]
+fn a_finished_call_folds_its_command_back_to_the_first_line() {
+    let mut app = app_with_open_call("python3 - <<'E'\nedit\nE\ncargo test -p wf-cli");
+    let coder = app.snapshot.working[0].clone();
+    app.transcribed(
+        coder.id,
+        &[update(
+            20,
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "3", "status": "completed"}),
+        )],
+    );
+    let shown = tall(&mut app);
+    assert!(shown.contains("python3 - <<'E' …"), "{shown}");
+    assert!(!shown.contains("cargo test -p wf-cli"), "{shown}");
+}

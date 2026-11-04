@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+use jiff::Timestamp;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
 use ratatui::text::Line;
@@ -185,9 +186,13 @@ impl TranscriptLines {
     }
 
     /// The lines of what is still open in `transcript` (its prose, its running calls), which go
-    /// below [`TranscriptLines::lines`]. They change until they are done, so they are laid out
-    /// for each frame.
-    pub fn open_lines(&self, transcript: &Transcript) -> Vec<Line<'static>> {
+    /// below [`TranscriptLines::lines`], at `now` while they can still go on. They change until
+    /// they are done, so they are laid out for each frame.
+    pub fn open_lines(
+        &self,
+        transcript: &Transcript,
+        now: Option<Timestamp>,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let mut last = self.last;
         if let Some(prose) = transcript.open_prose() {
@@ -195,7 +200,7 @@ impl TranscriptLines {
             add(&mut lines, &mut last, Spacing::Prose, Spacing::Prose, &text);
         }
         for call in transcript.open_calls() {
-            let text = self.layout.running(call);
+            let text = self.layout.running(call, now);
             add(&mut lines, &mut last, Spacing::Tool, Spacing::Tool, &text);
         }
         lines
