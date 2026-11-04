@@ -896,9 +896,15 @@ impl GitCli {
                     return Ok(Rebase::UpToDate);
                 }
                 let shared = self.run(directory, &[], ["merge-base", onto.as_str(), "HEAD"])?;
-                if !shared.success && shared.stdout.trim().is_empty() {
+                // Exit status 1 without output: no common ancestor. Anything else is an error, a
+                // missing object for one.
+                if !shared.success
+                    && shared.stdout.trim().is_empty()
+                    && shared.stderr.trim().is_empty()
+                {
                     return Ok(Rebase::Unrelated);
                 }
+                shared.ok()?;
                 let paths = self.changed_paths(directory)?;
                 if !paths.is_empty() {
                     return Ok(Rebase::DirtyCheckout(DirtyCheckout {
@@ -2367,6 +2373,19 @@ mod tests {
         let work = commit_in(&directory, "a.txt", "a\n");
         let rewritten = rootless_rewrite(&repo);
         assert_eq!(agent.rebase_plain(rewritten).unwrap(), Rebase::Unrelated);
+        assert_eq!(agent.branch_head("wf/k3f9").unwrap(), work);
+    }
+
+    #[test]
+    fn a_target_whose_objects_are_gone_is_an_error_not_unrelated() {
+        let repo = TestRepo::new();
+        let (directory, agent) = agent_repository(&repo);
+        let work = commit_in(&directory, "a.txt", "a\n");
+        let missing = CommitId::Git("0123456789abcdef0123456789abcdef01234567".parse().unwrap());
+        assert!(matches!(
+            agent.rebase_plain(missing),
+            Err(VcsError::Git { .. })
+        ));
         assert_eq!(agent.branch_head("wf/k3f9").unwrap(), work);
     }
 
