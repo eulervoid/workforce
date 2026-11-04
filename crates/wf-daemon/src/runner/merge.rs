@@ -340,7 +340,7 @@ impl Daemon {
                     let written = comment(format!(
                         "{} has no history in common with {target}, which was rewritten since the \
                          work began: it cannot be merged. The next session takes its own commits \
-                         across, with `git rebase --onto {target} <the commit before its first>`.",
+                         across, with `git rebase --onto {at} <the commit before its first>`.",
                         commit.short()
                     ))
                     .await?;

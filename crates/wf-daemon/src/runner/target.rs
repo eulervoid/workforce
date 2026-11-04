@@ -918,6 +918,26 @@ mod tests {
         };
         assert_eq!(live.merges().count(), 0);
         assert_eq!(live.comments().len(), 1, "it says why");
+        let comment = *live.comments().keys().next().unwrap();
+        let said = scene
+            .loaded
+            .storage
+            .with(move |replica| {
+                wf_store::EventStore::event(replica.store(), &wf_core::id::EventId::from(comment))
+                    .unwrap()
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        let EventBody::Commented(said) = said.content.body else {
+            panic!("a comment");
+        };
+        assert!(
+            said.text
+                .contains(&format!("`git rebase --onto {rewritten} ")),
+            "an agent repository has no ref for the target: {}",
+            said.text
+        );
         assert_eq!(state.target(), Some(rewritten));
         assert_ne!(main, rewritten);
     }
