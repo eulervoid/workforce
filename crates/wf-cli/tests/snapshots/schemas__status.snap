@@ -38,6 +38,7 @@ expression: "Envelope::new(view::status(&scenario.state,\n&scenario.state.depend
     "refolded": false,
     "caches": null,
     "awaiting_commits": [],
+    "unrelated_target": null,
     "checkout_target": "main here is 2 commits behind wf's repository: `git pull`"
   }
 }

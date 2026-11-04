@@ -180,6 +180,9 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         Command::Work(command) => work(json, command, &mut open(json, movable, data, cwd)?),
         Command::Review(args) => review(json, mode, &mut open(json, movable, data, cwd)?, args),
         Command::Check { names } => check(json, &open(json, movable, data, cwd)?, cwd, names),
+        Command::Target(TargetCommand::Adopt { commit }) => {
+            adopt_target(json, &mut open(json, movable, data, cwd)?, &commit)
+        }
         Command::Inbox => {
             let workspace = open(json, movable, data, cwd)?;
             let views = view::inbox_views(
@@ -229,6 +232,29 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
 /// target of the principal's checkout and wf's brought in step as `movable` lets it. When the
 /// checkout still has commits on the target that agents cannot see, one line on stderr says so;
 /// never with `--json`, and never in a session.
+/// Takes the rewritten target as the target. The principal names the commit, so that what they
+/// looked at is what is adopted.
+fn adopt_target(json: bool, workspace: &mut Workspace, commit: &str) -> anyhow::Result<()> {
+    let Some(unrelated) = workspace.machine_faults()?.unrelated_target else {
+        bail!("the target follows the log: there is nothing to adopt");
+    };
+    let branch = unrelated.branch;
+    if commit.len() < branch.short().len() || !branch.to_string().starts_with(commit) {
+        bail!("the target is at {}, not {commit}", branch.short());
+    }
+    workspace.adopt_target(branch)?;
+    emit(
+        json,
+        &Done {
+            message: format!("The target goes on from {}", branch.short()),
+            event: None,
+            session: None,
+            item: None,
+        },
+        |done| format!("{}\n", done.message),
+    )
+}
+
 fn open(json: bool, movable: Movable, data: DataDir, cwd: &Path) -> anyhow::Result<Workspace> {
     let workspace = Workspace::open(data, cwd, false)?;
     let apart = follow_target(json, &workspace, movable);

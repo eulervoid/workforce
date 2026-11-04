@@ -135,6 +135,11 @@ fn rebase_onto_target(workspace: &mut Workspace, session: SessionId) -> anyhow::
              uncommitted changes to {}; commit or discard them, then submit again",
             dirty.files()
         ),
+        wf_vcs::Rebase::Unrelated => bail!(
+            "the branch has no history in common with `{target}`, which was rewritten since the \
+             work began, so it cannot simply be rebased. Take your own commits across with `git \
+             rebase --onto {onto} <the commit before your first>`, then submit again"
+        ),
     }
 }
 

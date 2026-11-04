@@ -134,6 +134,7 @@ async fn answer_call(
         | Call::AnswerPermission { .. }
         | Call::Presence
         | Call::MachineFaults
+        | Call::AdoptTarget(_)
         | Call::CacheUsage
         | Call::LiveDiff { .. }
         | Call::SnapshotDiff { .. }
@@ -196,6 +197,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         | Call::AwaitedCommits
         | Call::EndSession { .. } => Ok(()),
         Call::Fork(_) => principals("found a fork"),
+        Call::AdoptTarget(_) => principals("adopt a rewritten target"),
         Call::Join { .. } => principals("join a workforce"),
         Call::Follow(_) => principals("follow a workforce"),
         Call::StartSession { .. } => principals("start sessions"),
@@ -378,7 +380,14 @@ async fn call(
             reply(results)
         }
         Call::Presence => reply(daemon.presence_now()),
-        Call::MachineFaults => reply(daemon.faults.current()),
+        Call::MachineFaults => reply(daemon.faults.current_in(workforce)),
+        Call::AdoptTarget(commit) => {
+            daemon
+                .adopt_target(workforce, loaded, commit)
+                .await
+                .map_err(|error| wf_core::error_chain(&error))?;
+            reply(())
+        }
         Call::CacheUsage => reply(daemon.cache_usage_of(workforce)),
         Call::AwaitedCommits => reply(loaded.commits.awaited()),
         Call::LiveDiff { item, since } => {

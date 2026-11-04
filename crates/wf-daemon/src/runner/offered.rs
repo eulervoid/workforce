@@ -159,6 +159,8 @@ impl Daemon {
                     continue;
                 }
                 Ok(MergeTree::Conflict { paths }) => paths,
+                // The merge tells, once the principal has settled the target.
+                Ok(MergeTree::Unrelated) => continue,
                 Err(error) => {
                     tracing::warn!(
                         "could not check whether #{} merges into {target}: {}",

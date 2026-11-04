@@ -12,6 +12,7 @@ use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::invite::InviteCode;
 use wf_core::lifecycle::Finish;
 use wf_core::name::{AgentName, ReviewStepName};
+use wf_core::session::CommitId;
 use wf_core::state::State;
 use wf_harness::Permission;
 
@@ -332,6 +333,15 @@ impl DaemonClient {
         workforce: WorkforceId,
     ) -> Result<crate::MachineFaults, ClientError> {
         self.call(workforce, Call::MachineFaults)
+    }
+
+    /// Takes the target branch, at `commit` and unrelated to the tip the log names, as the target.
+    pub fn adopt_target(
+        &mut self,
+        workforce: WorkforceId,
+        commit: CommitId,
+    ) -> Result<(), ClientError> {
+        self.call(workforce, Call::AdoptTarget(commit))
     }
 
     /// Answers the oldest request of a session, if it is the one held since `since_ms`, and says

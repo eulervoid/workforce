@@ -975,7 +975,8 @@ default level; an item can name another (`--recovery`).
   is. No git process runs with the agent repository's config, hooks or attributes, and the objects
   copied are only those the commit reaches, so an edited `alternates` file adds nothing. Review,
   checks and merge see only `wf/<item>` in `<wf>/git`.
-* If the target is rewritten behind the agent's base (wf never does, and a push cannot), the objects
+* If the target is rewritten behind the agent's base (wf never does and a push cannot, but a direct
+  write of the ref can: see [the target is a chain in the log](#the-target-is-a-chain-in-the-log)), the objects
   that agent repository got through its alternates can be pruned and git there fails with missing
   objects; the repository is then removed and made again. `gc` or `pack-refs` in either repository
   changes nothing the import relies on.
@@ -1289,7 +1290,7 @@ Every move of the target names the tip it moved from, so every device agrees whe
 
 * **Moves.** A merge writes `Merged{.., onto}`; a push of the principal to `wf` is written by the
   daemon of the device pushed to as `TargetMoved{commit, onto}`. The daemon looks for pushes every
-  5 s, and follows the log whenever what it says of the target changes: a target branch in `<wf>/git` that is neither a commit some move made
+  5 s, and follows the log whenever what it says of the target changes: a target branch in `<wf>/git` that is neither a commit some move made or left
   nor an ancestor of the tip in the log is a push, from the merge base of the two (from the branch
   it last saw while the log has no tip). A merge found landed in the target moves nothing and has
   no `onto`.
@@ -1310,6 +1311,28 @@ Every move of the target names the tip it moved from, so every device agrees whe
 * **A lost push** of the principal waits in their inbox (`lost_push`), the latest of each device,
   until a later push from it is on the chain: rebase onto the target (`git pull --rebase`) and push
   again. A principal who pulled a merge that later lost finds their next push lost the same way.
+* **A rewritten target.** No push rewrites the target, but a direct write of the ref in `<wf>/git`
+  can (`git filter-branch` of the whole history, or a wrong repository). A branch with no history in
+  common with the tip has no merge base to be a push from, and it never comes to one by itself, so
+  the daemon leaves it where it is: no merge starts and none is claimed, a first attempt says so on
+  the item, the daemon warns once per branch and tip, and the principal is told by `wf inbox`
+  (`unrelated_target`), `wf status` and the dashboard. That is kept by the daemon of the device, not
+  in the log, as only that device's `<wf>/git` is wrong.
+
+  Accepting it by itself would accept a mistaken repository silently, so the principal answers:
+  `wf target adopt <commit>` writes the branch as `TargetMoved{commit, onto}` from the tip, nothing
+  new in the log, and the chain goes on from there; or they put the ref back at the tip, and the next
+  pass finds nothing wrong. The commit named must be where the branch is. Other devices follow like
+  any move: they fetch the tip and move their branch to it, from any commit a move made or left. A
+  device whose branch is on neither history (a push of the old history not yet written, or its own
+  rewrite) is told the same way. An adoption is a move like any other, so a merge of another device
+  onto the same tip can win the fork: the branch then goes back, and the adoption waits as a
+  `lost_push`.
+
+  Work on the old history cannot be merged afterwards: its item goes back to `open` with a comment,
+  like a conflict, and the agent's submission refuses a rebase, which would replay the old history
+  too, and says to take its own commits across with `git rebase --onto`. A checkout on the old
+  history diverges, as any does.
 
 ### Commit identity and signatures
 
@@ -1836,6 +1859,7 @@ wf review <item> --approve | --request-changes | --escalate [--note]
 wf check [<name>...]
 wf inbox
 wf agent add | list | show | edit | remove;  wf harness models <harness>
+wf target adopt <commit>
 wf session start [--step <name>] [--watch] | list [--live] | show | stop | watch | allow | deny
 wf work brief | submit | release                            # agents, inside a session
 wf permissions test [--command <cmd>]
@@ -1866,7 +1890,7 @@ wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | f
   changes only through the verbs.
 * **`wf inbox`** lists what waits on the principal: `blocker`, `proposal` (an item in `review` without
   submitted work, such as a decision), `principal_review`, `recovery`, `mention` (a comment that
-  mentions the principal, section 8), `permission`, `machine_fault` and `lost_push`, each with the
+  mentions the principal, section 8), `permission`, `machine_fault`, `lost_push` and `unrelated_target`, each with the
   command that answers it. `wf status` summarises the workforce, flags
   what needs someone (stranded items, steps no agent can take, unknown states, an unreadable policy)
   and says what to do next.

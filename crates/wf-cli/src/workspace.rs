@@ -628,6 +628,15 @@ impl Workspace {
         Ok(client.target_commit(workforce)?)
     }
 
+    /// Takes the target branch, at `commit` and unrelated to the tip the log names, as the target.
+    pub fn adopt_target(&mut self, commit: CommitId) -> anyhow::Result<()> {
+        let workforce = self.workforce;
+        let (client, state) = self.daemon("adopt a rewritten target")?;
+        client.adopt_target(workforce, commit)?;
+        *state = client.state(workforce)?;
+        Ok(())
+    }
+
     /// Stops a session that runs in the daemon now.
     pub fn stop_session(&mut self, session: SessionId) -> anyhow::Result<()> {
         let workforce = self.workforce;

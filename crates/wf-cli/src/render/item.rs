@@ -484,9 +484,10 @@ pub(super) fn notices(detail: &ItemDetail, width: Option<usize>, format: Format)
                 .iter()
                 .map(|waiting| {
                     let style = match waiting.kind {
-                        InboxKind::Recovery | InboxKind::MachineFault | InboxKind::LostPush => {
-                            theme::error()
-                        }
+                        InboxKind::Recovery
+                        | InboxKind::MachineFault
+                        | InboxKind::LostPush
+                        | InboxKind::UnrelatedTarget => theme::error(),
                         InboxKind::Blocker
                         | InboxKind::Proposal
                         | InboxKind::PrincipalReview

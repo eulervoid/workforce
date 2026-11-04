@@ -228,6 +228,8 @@ pub enum MergeTree {
     Clean { base: CommitId, tree: GitOid },
     /// The work does not merge cleanly. The paths are the files in conflict.
     Conflict { paths: Vec<String> },
+    /// The work has no history in common with the target, which was rewritten under it.
+    Unrelated,
 }
 
 /// What the commits of an agent's repository have to be before they are copied into the
@@ -266,6 +268,9 @@ pub enum Rebase {
     /// The repository has uncommitted changes, which a rebase would have to carry along. Nothing
     /// was rewritten.
     DirtyCheckout(DirtyCheckout),
+    /// The branch has no history in common with the target, which was rewritten under it: a
+    /// rebase would replay the old history as well. Nothing was rewritten.
+    Unrelated,
 }
 
 /// Whether a rebase is stopped in a repository.

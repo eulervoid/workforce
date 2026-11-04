@@ -1945,6 +1945,79 @@ fn the_checkout_and_wfs_repository_follow_each_other_where_one_fast_forwards_the
 }
 
 #[test]
+fn a_rewritten_target_waits_in_the_inbox_until_the_principal_adopts_it() {
+    use wf_vcs::testing::{git_in, init_repository};
+
+    let wf = Sandbox::new();
+    init_repository(&wf.repository);
+    wf.run(&["init", "--name", "demo"]);
+    let (_, workforce) = wf_cli::workspace::find_workforce(&wf.repository).unwrap();
+    let daemon = wf.start_daemon();
+    let wait_for = |what: &str, done: &dyn Fn() -> bool| {
+        for _ in 0..600 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("{what}");
+    };
+    std::fs::write(wf.repository.join("own.txt"), "own\n").unwrap();
+    git_in(&wf.repository, &["add", "own.txt"]);
+    git_in(&wf.repository, &["commit", "--quiet", "-m", "own"]);
+    git_in(&wf.repository, &["push", "--quiet", "wf", "main"]);
+    let pushed = git_in(&wf.repository, &["rev-parse", "main"]);
+    let moves = || {
+        wf.json(&["log"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event.to_string().contains("TargetMoved"))
+            .count()
+    };
+    wait_for("the push is written", &|| moves() == 1);
+
+    let bare = wf_vcs::bare_repository(
+        &wf_daemon::DataDir::new(wf.data.join("workforce")).workforce(&workforce),
+    );
+    let rewritten = git_in(&bare, &["commit-tree", "main^{tree}", "-m", "rewritten"]);
+    git_in(&bare, &["update-ref", "refs/heads/main", &rewritten]);
+    let short = &rewritten[..8];
+    let inbox = || wf.json(&["inbox"]);
+    let unrelated = |inbox: &serde_json::Value| {
+        inbox
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["kind"] == "unrelated_target")
+    };
+    wait_for("the inbox says so", &|| unrelated(&inbox()));
+    let entry = inbox()[0]["what"].as_str().unwrap().to_string();
+    assert!(
+        entry.contains(&format!("`wf target adopt {short}`")),
+        "{entry}"
+    );
+    assert!(entry.contains(&pushed[..8]), "{entry}");
+    let status = wf.run(&["status"]);
+    assert!(status.contains("waiting on you: 1"), "{status}");
+    assert!(status.contains("! no merge starts"), "{status}");
+
+    let error = wf.fail(&["target", "adopt", &pushed]);
+    assert!(
+        error.contains(&format!("the target is at {short}")),
+        "{error}"
+    );
+    assert_eq!(moves(), 1, "nothing is taken for a push");
+
+    wf.run(&["target", "adopt", short]);
+    assert!(!unrelated(&inbox()));
+    assert_eq!(moves(), 2);
+    let error = wf.fail(&["target", "adopt", short]);
+    assert!(error.contains("nothing to adopt"), "{error}");
+    daemon.stop();
+}
+
+#[test]
 fn a_fork_starts_with_the_repository_of_its_parent_and_the_checkout_pushes_to_it() {
     use wf_vcs::testing::{git_in, init_repository};
 

@@ -93,6 +93,29 @@ earlier move wins on every machine, and the other machine puts its `main` back o
   `main` with `git pull --rebase` and push again. The same happens to a push on top of a merge you
   pulled before it lost.
 
+### Rewriting the target
+
+A push cannot rewrite `main`, but writing the ref in wf's repository directly can, after a `git
+filter-branch` of the whole history, say. When `main` there has no history in common with the commit
+the log names, no merge starts: items stay in `review`, the daemon warns once in its log, and `wf
+inbox` (as `unrelated_target`), `wf status` and the dashboard name both commits. wf does not take
+the new history by itself, as it may just as well be a mistake. You say which is right:
+
+```sh
+wf target adopt 275857e2                 # the rewrite is meant: the log goes on from it
+git -C ~/.local/share/workforce/<workforce id>/git update-ref refs/heads/main d5ec7aa4
+                                         # it is not: put main back where the log says
+```
+
+Name the commit `wf inbox` shows: it must be where `main` is, so that what you looked at is what is
+adopted. The waiting merges then go on, and your other machines move their `main` to the rewrite
+once its commit arrives. Do this while nothing else moves `main`: a merge on another machine that
+crossed the adoption can win, as above, and it then waits as `lost_push`.
+
+Work begun on the old history does not merge: its item goes back to `open` with a comment, and the
+next session takes its own commits across with `git rebase --onto`. Your own checkout on the old
+history has diverged from `main`, and `wf status` says so.
+
 ## Syncing
 
 With the daemon running, devices find each other and exchange events by themselves. Without one:

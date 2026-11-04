@@ -318,6 +318,90 @@ fn merged(state: &State, item: ItemId) -> bool {
 
 // Multi-threaded: the daemons serve on the runtime while the test waits on them.
 #[tokio::test(flavor = "multi_thread")]
+async fn a_rewrite_adopted_on_one_device_reaches_the_other_with_its_commits() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
+    let fixture = Fixture::new(2);
+    let repository = TestRepository::new();
+    let pushed = repository.work("pushed", "pushed.txt", "pushed\n");
+    let (events, _) = submitted_tasks(&fixture, &policy_with_a_check(Path::new("/dev/null")), &[]);
+    let devices = [
+        within(
+            "starting device 0",
+            Device::start(&fixture, 0, &events, &repository),
+        )
+        .await,
+        within(
+            "starting device 1",
+            Device::start(&fixture, 1, &events, &repository),
+        )
+        .await,
+    ];
+    connect(&devices[0], &devices[1]).await;
+
+    devices[0].fetch(&repository, "pushed", "refs/heads/main");
+    for device in &devices {
+        device.sync_now().await;
+        let bare = device.bare();
+        device
+            .wait_for("the push", |state| {
+                state.target() == Some(pushed) && has_commit(&bare, pushed)
+            })
+            .await;
+        eventually("<wf>/git follows the push", || device.main() == pushed).await;
+    }
+
+    let bare = devices[0].bare();
+    let rewritten = git_in(
+        &bare,
+        &[
+            "-c",
+            "user.name=principal",
+            "-c",
+            "user.email=principal@example.com",
+            "commit-tree",
+            "main^{tree}",
+            "-m",
+            "rewritten",
+        ],
+    );
+    git_in(&bare, &["update-ref", "refs/heads/main", &rewritten]);
+    let rewritten = CommitId::Git(rewritten.parse().unwrap());
+    let workforce = devices[0].workforce;
+    let mut client = devices[0].client().await;
+    within(
+        "adopting the rewrite",
+        blocking(move || {
+            for _ in 0..600 {
+                let faults = client.machine_faults(workforce).unwrap();
+                if faults.unrelated_target.is_some() {
+                    client.adopt_target(workforce, rewritten).unwrap();
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            panic!("the daemon did not find the rewrite");
+        }),
+    )
+    .await;
+
+    devices[1].sync_now().await;
+    devices[1]
+        .wait_for("the move", |state| state.target() == Some(rewritten))
+        .await;
+    eventually("<wf>/git of the other device follows the rewrite", || {
+        devices[1].main() == rewritten
+    })
+    .await;
+    assert_eq!(devices[0].main(), rewritten);
+    for device in devices {
+        device.daemon.halt().await;
+    }
+}
+
+// Multi-threaded: the daemons serve on the runtime while the test waits on them.
+#[tokio::test(flavor = "multi_thread")]
 async fn two_devices_that_reach_each_other_merge_an_item_once_by_the_earliest_claim() {
     if wf_core::testing::skip_in_fence("iroh needs the route socket") {
         return;

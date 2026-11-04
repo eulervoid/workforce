@@ -200,7 +200,7 @@ pub(crate) async fn run_merger(daemon: Weak<Daemon>, workforce: WorkforceId, loa
 impl Daemon {
     /// Merges reviewed work into the target branch and finishes the item. What cannot be merged
     /// now leaves the item where the principal or a later session will see it.
-    async fn merge_item(
+    pub(super) async fn merge_item(
         &self,
         workforce: WorkforceId,
         loaded: &Loaded,
@@ -246,16 +246,7 @@ impl Daemon {
         }
         self.ensure_bare_repository(workforce, &loaded.storage)
             .await;
-        // Another device that is there holds the merge: it makes it.
-        if !self
-            .hold_merge(workforce, loaded, principal, item, commit, Claiming::Claim)
-            .await?
-        {
-            return Ok(());
-        }
         let target = policy.merge.target.clone();
-        let message = format!("Merge #{}: {}", HashId::short(&item), live.title());
-        let open = state.after_failed_merge(item, MergeFailure::Conflict);
         let comment = |body: String| {
             self.author(
                 loaded,
@@ -263,6 +254,33 @@ impl Daemon {
                 EventBody::Commented(Commented::plain(item, body)),
             )
         };
+        // What cannot start claims nothing: a claim would say a merge is under way, and hold up
+        // the devices that could make it.
+        match self.follow_target(workforce, loaded).await? {
+            TargetAt::Tip { .. } => {}
+            TargetAt::Elsewhere => return Ok(()),
+            TargetAt::Unrelated { branch, tip } => {
+                if attempt != Attempt::Retry {
+                    comment(format!(
+                        "Waiting to merge: {target} is at {}, which has no history in common with \
+                         {}, the tip the log names. `wf inbox` says what to do.",
+                        branch.short(),
+                        tip.short()
+                    ))
+                    .await?;
+                }
+                return Ok(());
+            }
+        }
+        // Another device that is there holds the merge: it makes it.
+        if !self
+            .hold_merge(workforce, loaded, principal, item, commit, Claiming::Claim)
+            .await?
+        {
+            return Ok(());
+        }
+        let message = format!("Merge #{}: {}", HashId::short(&item), live.title());
+        let open = state.after_failed_merge(item, MergeFailure::Conflict);
 
         // A merge that cannot be made leaves the item in `review`, where the session that did the
         // work moved it and the dispatcher tries again.
@@ -318,6 +336,28 @@ impl Daemon {
             outcome = match made {
                 MergeTree::Landed { commit } => MergeOutcome::Merged { commit },
                 MergeTree::Conflict { paths } => MergeOutcome::Conflict { paths },
+                MergeTree::Unrelated => {
+                    let written = comment(format!(
+                        "{} has no history in common with {target}, which was rewritten since the \
+                         work began: it cannot be merged. The next session takes its own commits \
+                         across, with `git rebase --onto {target} <the commit before its first>`.",
+                        commit.short()
+                    ))
+                    .await?;
+                    if let Some(open) = open {
+                        let because = Some(CommentId::from(written.id()));
+                        self.move_item(
+                            loaded,
+                            principal,
+                            item,
+                            open,
+                            because,
+                            attempt.by_session(),
+                        )
+                        .await?;
+                    }
+                    return Ok(());
+                }
                 // A push came since the pass, which the next one writes down first: merged onto
                 // it now, the merge would start from a commit no move made, and lose.
                 MergeTree::Clean { base, .. } if base != at => MergeOutcome::TargetMoved,

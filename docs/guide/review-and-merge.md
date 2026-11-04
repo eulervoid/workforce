@@ -176,7 +176,7 @@ git push                         # sends your own commits on main to wf's reposi
 ```
 
 Your pushes are taken only as fast-forwards: a push that rewrites `main` is refused, as wf's merges
-build on it. If your push and a merge cross, the daemon merges again on top of yours. Your other
+build on it; see [machines.md](machines.md#rewriting-the-target) for a rewrite you mean. If your push and a merge cross, the daemon merges again on top of yours. Your other
 branches are never sent to wf's repository, and nothing in it is pushed anywhere. The merge commit is
 made and signed as the git config of wf's repository and of your account say (`wf init` copied your
 checkout's `user.name`, `user.email` and signing config into it; `git -C ~/.local/share/workforce/<workforce
