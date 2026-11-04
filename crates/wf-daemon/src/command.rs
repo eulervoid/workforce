@@ -3,6 +3,7 @@
 //! outcome means is up to whoever asked, such as a check before a merge. `wf check` runs commands
 //! the same way in a directory as it is.
 
+use std::borrow::Cow;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -46,7 +47,7 @@ pub enum Confinement<'a> {
         /// allows.
         access: Access<'a>,
         sandbox: &'a SandboxConfig,
-        environment: &'a EnvironmentConfig,
+        environment: Cow<'a, EnvironmentConfig>,
         /// Where Fence's sandbox profile for the command is written.
         profile_file: &'a Path,
         /// Where the git config the command runs with is written: see [`wf_vcs::config::write_unsigned_global_config`].
@@ -58,7 +59,8 @@ pub enum Confinement<'a> {
 }
 
 impl<'a> Confinement<'a> {
-    /// The confinement of a check: in `sandbox`, with the environment `environment` gives agents.
+    /// The confinement of a check: in `sandbox`, with the environment `environment` gives agents
+    /// but without the cargo target directory of the machine's.
     pub fn for_checks(
         access: Access<'a>,
         sandbox: &'a SandboxConfig,
@@ -66,10 +68,13 @@ impl<'a> Confinement<'a> {
         profile_file: &'a Path,
         git_config: &'a Path,
     ) -> Self {
+        let mut environment = environment.clone();
+        environment.set.remove(CARGO_TARGET_DIR);
+        environment.inherit.retain(|name| name != CARGO_TARGET_DIR);
         Confinement::Agents {
             access,
             sandbox,
-            environment,
+            environment: Cow::Owned(environment),
             profile_file,
             git_config,
         }
@@ -196,7 +201,6 @@ impl Confinement<'_> {
         let mut process = tokio::process::Command::new(command.command());
         process
             .args(command.arguments())
-            .env_remove(CARGO_TARGET_DIR)
             .current_dir(self.directory())
             .stdin(Stdio::null())
             .stdout(output)
@@ -205,6 +209,9 @@ impl Confinement<'_> {
             .process_group(0)
             .kill_on_drop(true);
         if let Confinement::Session { .. } = self {
+            // It runs with the session's environment, whose cargo target directory would put the
+            // build outside the directory; confined as agents, the config leaves it out.
+            process.env_remove(CARGO_TARGET_DIR);
             // The session's variables, its token among them, would let the command act as the
             // session; outside a session the agents' environment leaves them out already.
             for name in crate::environment::daemon_variables() {
@@ -257,8 +264,8 @@ impl Confinement<'_> {
         })
     }
 
-    /// `command` in the sandbox, with the environment of agents but without the cargo target
-    /// directory of the machine's, and with the git config of [`wf_vcs::config::write_unsigned_global_config`].
+    /// `command` in the sandbox, with the environment it is confined to, and with the git config
+    /// of [`wf_vcs::config::write_unsigned_global_config`].
     fn confined(&self, command: AcpAgentConfig) -> Result<AcpAgentConfig, CommandError> {
         let Confinement::Agents {
             access,
@@ -289,9 +296,7 @@ impl Confinement<'_> {
             }
             SandboxConfig::Off {} | SandboxConfig::External {} => command,
         };
-        let mut environment = (*environment).clone();
-        environment.set.remove(CARGO_TARGET_DIR);
-        environment.inherit.retain(|name| name != CARGO_TARGET_DIR);
+        let mut environment = environment.clone().into_owned();
         environment.set.insert(
             wf_vcs::config::GLOBAL_CONFIG_VARIABLE.to_string(),
             git_config_path.to_string_lossy().into_owned(),
@@ -369,26 +374,28 @@ mod tests {
             argv: &[&str],
             timeout: Duration,
         ) -> CommandRun {
-            let (worktree, logs, profile_file) = (
+            let (worktree, logs, profile_file, git_config) = (
                 self.path("check"),
                 self.path("logs"),
                 self.path("check.json"),
+                self.path("check.gitconfig"),
             );
+            let data_dir = DataDir::new(self.repository.root.path().to_path_buf());
             let runner = CommandRunner {
                 git: &self.repository.git,
-                confinement: Confinement::Agents {
-                    access: Access {
+                confinement: Confinement::for_checks(
+                    Access {
                         directory: &worktree,
                         socket: Path::new("/nonexistent/daemon.sock"),
-                        data_dir: &DataDir::new(self.repository.root.path().to_path_buf()),
+                        data_dir: &data_dir,
                         machine_config: None,
                         harness: None,
                     },
                     sandbox,
                     environment,
-                    profile_file: &profile_file,
-                    git_config: &self.path("check.gitconfig"),
-                },
+                    &profile_file,
+                    &git_config,
+                ),
                 logs: &logs,
             };
             let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
