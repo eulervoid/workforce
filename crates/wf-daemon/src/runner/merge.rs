@@ -280,6 +280,7 @@ impl Daemon {
             return Ok(());
         }
         let message = format!("Merge #{}: {}", HashId::short(&item), live.title());
+        let chain = state.chain_commits();
         let open = state.after_failed_merge(item, MergeFailure::Conflict);
 
         // A merge that cannot be made leaves the item in `review`, where the session that did the
@@ -321,8 +322,9 @@ impl Daemon {
                 hook();
             }
             let made = {
-                let (repository, target) = (repository.clone(), target.clone());
-                blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit))
+                let (repository, target, chain) =
+                    (repository.clone(), target.clone(), chain.clone());
+                blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit, &chain))
                     .await
                     .and_then(|made| made.map_err(SessionError::from))
             };
@@ -336,11 +338,12 @@ impl Daemon {
             outcome = match made {
                 MergeTree::Landed { commit } => MergeOutcome::Merged { commit },
                 MergeTree::Conflict { paths } => MergeOutcome::Conflict { paths },
-                MergeTree::Unrelated => {
+                MergeTree::Rewritten => {
                     let written = comment(format!(
-                        "{} has no history in common with {target}, which was rewritten since the \
-                         work began: it cannot be merged. The next session takes its own commits \
-                         across, with `git rebase --onto {at} <the commit before its first>`.",
+                        "{} is on a history of {target} that was rewritten since the work began: \
+                         it cannot be merged, as the old history would come back with it. The \
+                         next session takes its own commits across, with `git rebase --onto {at} \
+                         <the commit before its first>`.",
                         commit.short()
                     ))
                     .await?;

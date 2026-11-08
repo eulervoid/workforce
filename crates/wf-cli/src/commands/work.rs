@@ -118,9 +118,10 @@ fn rebase_onto_target(workspace: &mut Workspace, session: SessionId) -> anyhow::
         .map(|config| config.policy.merge.target.clone())
         .unwrap_or_default();
     let onto = workspace.target_commit()?;
+    let chain = workspace.state().chain_commits();
     let directory =
         wf_vcs::item_repository(&workspace.data.workforce(&workspace.workforce()), item);
-    match wf_vcs::GitCli::open(&directory)?.rebase(onto)? {
+    match wf_vcs::GitCli::open(&directory)?.rebase(onto, &chain)? {
         wf_vcs::Rebase::UpToDate => Ok(()),
         wf_vcs::Rebase::Rebased => Ok(()),
         wf_vcs::Rebase::Conflict { paths } => bail!(
@@ -135,10 +136,11 @@ fn rebase_onto_target(workspace: &mut Workspace, session: SessionId) -> anyhow::
              uncommitted changes to {}; commit or discard them, then submit again",
             dirty.files()
         ),
-        wf_vcs::Rebase::Unrelated => bail!(
-            "the branch has no history in common with `{target}`, which was rewritten since the \
-             work began, so it cannot simply be rebased. Take your own commits across with `git \
-             rebase --onto {onto} <the commit before your first>`, then submit again"
+        wf_vcs::Rebase::Rewritten => bail!(
+            "the branch is on a history of `{target}` that was rewritten since the work began, so \
+             it cannot simply be rebased: the old history would come back with it. Take your own \
+             commits across with `git rebase --onto {onto} <the commit before your first>`, then \
+             submit again"
         ),
     }
 }

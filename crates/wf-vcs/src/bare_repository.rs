@@ -420,7 +420,10 @@ mod tests {
         let path = repo.root.path().join("wf-git");
         let bare = GitCli::create_bare_repository(&path, "main", Some(&checkout)).unwrap();
         let work = bare.branch_head(&item_branch).unwrap();
-        let MergeTree::Clean { base, tree } = bare.merge_tree("main", work).unwrap() else {
+        let MergeTree::Clean { base, tree } = bare
+            .merge_tree("main", work, &std::collections::BTreeSet::new())
+            .unwrap()
+        else {
             panic!("the work merges cleanly");
         };
 
@@ -434,7 +437,10 @@ mod tests {
         assert_eq!(outcome, MergeOutcome::TargetMoved);
         assert_eq!(bare.branch_head("main").unwrap(), own);
 
-        let MergeTree::Clean { base, tree } = bare.merge_tree("main", work).unwrap() else {
+        let MergeTree::Clean { base, tree } = bare
+            .merge_tree("main", work, &std::collections::BTreeSet::new())
+            .unwrap()
+        else {
             panic!("the work merges cleanly");
         };
         let MergeOutcome::Merged { commit } = bare

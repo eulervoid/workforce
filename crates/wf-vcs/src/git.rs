@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -479,6 +480,50 @@ impl GitCli {
         self.move_branch(target, Some(from), commit)
     }
 
+    /// The commit `revision` names in this repository (a hash, a prefix of one, a branch), `None`
+    /// when it names none.
+    pub fn find_commit(&self, revision: &str) -> Result<Option<CommitId>, VcsError> {
+        let revision = format!("{revision}^{{commit}}");
+        let found = self.run(
+            &self.repository,
+            &[],
+            [
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &revision,
+            ],
+        )?;
+        if !found.success {
+            return Ok(None);
+        }
+        self.oid("rev-parse", &found.stdout).map(Some)
+    }
+
+    /// Whether `commit`, in `directory`, has one of `chain`, the commits the target was at, that
+    /// `onto` lacks: it was begun on a history of the target that a rewrite replaced.
+    fn left_behind(
+        &self,
+        directory: &Path,
+        commit: &str,
+        onto: &str,
+        chain: &BTreeSet<CommitId>,
+    ) -> Result<bool, VcsError> {
+        if chain.is_empty() {
+            return Ok(false);
+        }
+        let listed = self
+            .run(directory, &[], ["rev-list", commit, "--not", onto])?
+            .ok()?;
+        for line in listed.lines() {
+            if chain.contains(&self.oid("rev-list", line)?) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// The best common ancestor of `one` and `other`, `None` for unrelated histories.
     pub fn merge_base(&self, one: CommitId, other: CommitId) -> Result<Option<CommitId>, VcsError> {
         let found = self.run(
@@ -753,12 +798,29 @@ impl GitCli {
     }
 
     /// What merging `commit` into `target` makes, without committing it or moving `target`.
-    pub fn merge_tree(&self, target: &str, commit: CommitId) -> Result<MergeTree, VcsError> {
+    /// `chain` holds the commits the target was at, as the log says ([`State::chain_commits`]).
+    ///
+    /// [`State::chain_commits`]: wf_core::state::State::chain_commits
+    pub fn merge_tree(
+        &self,
+        target: &str,
+        commit: CommitId,
+        chain: &BTreeSet<CommitId>,
+    ) -> Result<MergeTree, VcsError> {
         let base = self.branch_head(target)?;
         // Merged already, by a merge whose event was never written: merging again would only add
         // an empty merge commit.
         if let Some(landed) = self.landed(commit, base)? {
             return Ok(MergeTree::Landed { commit: landed });
+        }
+        // Merged, it would bring back the history the rewrite replaced.
+        if self.left_behind(
+            &self.repository,
+            &commit.to_string(),
+            &base.to_string(),
+            chain,
+        )? {
+            return Ok(MergeTree::Rewritten);
         }
         let merged = self.run(
             &self.repository,
@@ -784,7 +846,7 @@ impl GitCli {
         if tree.trim().is_empty() {
             return match self.merge_base(base, commit)? {
                 Some(_) => Err(merged.error()),
-                None => Ok(MergeTree::Unrelated),
+                None => Ok(MergeTree::Rewritten),
             };
         }
         let paths = fields
@@ -851,7 +913,10 @@ impl GitCli {
     /// markers are left in it; any other conflict (binary, or a file one side deleted) only when
     /// the index says so, that is, when whoever works there has staged the outcome with `git add`
     /// or `git rm`.
-    pub fn rebase(&self, onto: CommitId) -> Result<Rebase, VcsError> {
+    ///
+    /// `chain` holds the commits the target was at, as the log says: a branch that has one `onto`
+    /// lacks is not rebased, nor one with no history in common with `onto`.
+    pub fn rebase(&self, onto: CommitId, chain: &BTreeSet<CommitId>) -> Result<Rebase, VcsError> {
         // The git config the session was given in its environment (how its commits are signed)
         // is the agent's own, so the rewritten commits are made the way its commits are.
         let session_config = std::env::vars()
@@ -861,12 +926,13 @@ impl GitCli {
                     || name.starts_with(crate::CONFIG_VALUE)
             })
             .collect();
-        self.rebase_with(onto, session_config)
+        self.rebase_with(onto, chain, session_config)
     }
 
     fn rebase_with(
         &self,
         onto: CommitId,
+        chain: &BTreeSet<CommitId>,
         session_config: Vec<(String, String)>,
     ) -> Result<Rebase, VcsError> {
         let directory = self.repository.as_path();
@@ -895,6 +961,10 @@ impl GitCli {
                 if contained.success {
                     return Ok(Rebase::UpToDate);
                 }
+                // Replayed, the history the rewrite replaced would come back with the work.
+                if self.left_behind(directory, "HEAD", onto.as_str(), chain)? {
+                    return Ok(Rebase::Rewritten);
+                }
                 let shared = self.run(directory, &[], ["merge-base", onto.as_str(), "HEAD"])?;
                 // Exit status 1 without output: no common ancestor. Anything else is an error, a
                 // missing object for one.
@@ -902,7 +972,7 @@ impl GitCli {
                     && shared.stdout.trim().is_empty()
                     && shared.stderr.trim().is_empty()
                 {
-                    return Ok(Rebase::Unrelated);
+                    return Ok(Rebase::Rewritten);
                 }
                 shared.ok()?;
                 let paths = self.changed_paths(directory)?;
@@ -1079,7 +1149,7 @@ mod tests {
         /// A rebase without the git config of this process's environment, which a test run in a
         /// session has.
         fn rebase_plain(&self, onto: CommitId) -> Result<Rebase, VcsError> {
-            self.rebase_with(onto, Vec::new())
+            self.rebase_with(onto, &BTreeSet::new(), Vec::new())
         }
     }
 
@@ -1093,10 +1163,10 @@ mod tests {
             message: &str,
             signing: &CommitSigning,
         ) -> Result<MergeOutcome, VcsError> {
-            match self.merge_tree(target, commit)? {
+            match self.merge_tree(target, commit, &BTreeSet::new())? {
                 MergeTree::Landed { commit } => Ok(MergeOutcome::Merged { commit }),
                 MergeTree::Conflict { paths } => Ok(MergeOutcome::Conflict { paths }),
-                MergeTree::Unrelated => unreachable!("the tests merge related histories"),
+                MergeTree::Rewritten => unreachable!("the tests merge related histories"),
                 MergeTree::Clean { base, tree } => {
                     self.commit_merge(target, base, tree, commit, message, signing)
                 }
@@ -1534,7 +1604,9 @@ mod tests {
     fn a_merge_tree_is_committed_only_while_the_target_is_where_it_was_made() {
         let repo = TestRepo::new();
         let work = repo.work("wf/k3f9", "a.txt", "a\n");
-        let MergeTree::Clean { base, tree } = repo.git.merge_tree("main", work).unwrap() else {
+        let MergeTree::Clean { base, tree } =
+            repo.git.merge_tree("main", work, &BTreeSet::new()).unwrap()
+        else {
             panic!("expected a clean merge");
         };
         assert_eq!(base, repo.git.branch_head("main").unwrap());
@@ -1553,7 +1625,9 @@ mod tests {
             .unwrap();
         assert_eq!(moved, MergeOutcome::TargetMoved);
 
-        let MergeTree::Clean { base, tree } = repo.git.merge_tree("main", work).unwrap() else {
+        let MergeTree::Clean { base, tree } =
+            repo.git.merge_tree("main", work, &BTreeSet::new()).unwrap()
+        else {
             panic!("expected a clean merge");
         };
         let MergeOutcome::Merged { commit } = repo
@@ -1566,7 +1640,7 @@ mod tests {
         assert_eq!(repo.git.branch_head("main").unwrap(), commit);
         assert_eq!(repo.git.tree_of(commit).unwrap(), tree);
         assert_eq!(
-            repo.git.merge_tree("main", work).unwrap(),
+            repo.git.merge_tree("main", work, &BTreeSet::new()).unwrap(),
             MergeTree::Landed { commit }
         );
     }
@@ -1642,7 +1716,7 @@ mod tests {
         repo.write(&main, "b.txt", "b\n");
         let later = repo.commit(&main, "later work on main");
         assert_eq!(
-            repo.git.merge_tree("main", work).unwrap(),
+            repo.git.merge_tree("main", work, &BTreeSet::new()).unwrap(),
             MergeTree::Landed { commit: work }
         );
         assert_eq!(repo.main(), later);
@@ -1688,7 +1762,7 @@ mod tests {
         };
         assert_ne!(first, second);
         assert_eq!(
-            repo.git.merge_tree("main", work).unwrap(),
+            repo.git.merge_tree("main", work, &BTreeSet::new()).unwrap(),
             MergeTree::Landed { commit: first }
         );
     }
@@ -1705,7 +1779,7 @@ mod tests {
         repo.write(&main, name, "main\n");
         repo.commit(&main, "conflicting change");
         assert_eq!(
-            repo.git.merge_tree("main", work).unwrap(),
+            repo.git.merge_tree("main", work, &BTreeSet::new()).unwrap(),
             MergeTree::Conflict {
                 paths: vec![name.into()]
             }
@@ -2361,8 +2435,8 @@ mod tests {
             &["update-ref", "refs/heads/main", &rewritten.to_string()],
         );
         assert_eq!(
-            repo.git.merge_tree("main", work).unwrap(),
-            MergeTree::Unrelated
+            repo.git.merge_tree("main", work, &BTreeSet::new()).unwrap(),
+            MergeTree::Rewritten
         );
     }
 
@@ -2372,7 +2446,75 @@ mod tests {
         let (directory, agent) = agent_repository(&repo);
         let work = commit_in(&directory, "a.txt", "a\n");
         let rewritten = rootless_rewrite(&repo);
-        assert_eq!(agent.rebase_plain(rewritten).unwrap(), Rebase::Unrelated);
+        assert_eq!(agent.rebase_plain(rewritten).unwrap(), Rebase::Rewritten);
+        assert_eq!(agent.branch_head("wf/k3f9").unwrap(), work);
+    }
+
+    /// `main` from `old`, its tip, rewritten below it: the same tree on the parent of `old`, as a
+    /// `git filter-branch` of the last commit leaves it. The commits the target was at are its
+    /// chain.
+    fn rewrite_below_the_tip(repo: &TestRepo, old: CommitId) -> (CommitId, BTreeSet<CommitId>) {
+        let below = repo.commit_id(&format!("{old}^"), &repo.directory());
+        let commit = git_in(
+            &repo.directory(),
+            &[
+                "commit-tree",
+                &format!("{old}^{{tree}}"),
+                "-p",
+                &below.to_string(),
+                "-m",
+                "rewritten",
+            ],
+        );
+        let rewritten = CommitId::Git(commit.parse().unwrap());
+        git_in(
+            &repo.directory(),
+            &["update-ref", "refs/heads/main", &rewritten.to_string()],
+        );
+        (rewritten, BTreeSet::from([below, old]))
+    }
+
+    #[test]
+    fn work_on_a_history_rewritten_below_the_tip_is_said_to_be_rewritten() {
+        let repo = TestRepo::new();
+        let old = commit_to_main(&repo, "b.txt", "b\n");
+        let work = repo.work("wf/k3f9", "work.txt", "work\n");
+        let (_, chain) = rewrite_below_the_tip(&repo, old);
+        assert_eq!(
+            repo.git.merge_tree("main", work, &chain).unwrap(),
+            MergeTree::Rewritten
+        );
+        // Without the log, git alone would merge the old history back.
+        assert!(matches!(
+            repo.git.merge_tree("main", work, &BTreeSet::new()).unwrap(),
+            MergeTree::Clean { .. }
+        ));
+    }
+
+    #[test]
+    fn work_begun_after_a_rewrite_below_the_tip_merges() {
+        let repo = TestRepo::new();
+        let old = commit_to_main(&repo, "b.txt", "b\n");
+        let (rewritten, mut chain) = rewrite_below_the_tip(&repo, old);
+        chain.insert(rewritten);
+        let work = repo.work("wf/k3f9", "work.txt", "work\n");
+        assert!(matches!(
+            repo.git.merge_tree("main", work, &chain).unwrap(),
+            MergeTree::Clean { .. }
+        ));
+    }
+
+    #[test]
+    fn a_branch_on_a_history_rewritten_below_the_tip_is_not_rebased() {
+        let repo = TestRepo::new();
+        let old = commit_to_main(&repo, "b.txt", "b\n");
+        let (directory, agent) = agent_repository(&repo);
+        let work = commit_in(&directory, "a.txt", "a\n");
+        let (rewritten, chain) = rewrite_below_the_tip(&repo, old);
+        assert_eq!(
+            agent.rebase_with(rewritten, &chain, Vec::new()).unwrap(),
+            Rebase::Rewritten
+        );
         assert_eq!(agent.branch_head("wf/k3f9").unwrap(), work);
     }
 

@@ -225,18 +225,18 @@ impl Daemon {
         let Submission {
             workforce, commit, ..
         } = *submission;
-        let target = self
+        let (target, chain) = self
             .read(loaded, |state| {
-                state
-                    .policy()
-                    .map(|policy| policy.policy.merge.target.clone())
+                let target = state.policy()?.policy.merge.target.clone();
+                Some((target, state.chain_commits()))
             })
             .await?
             .ok_or(SessionError::NoPolicy)?;
         let repository = self.bare_repository(workforce);
         let made = {
             let (repository, target) = (repository.clone(), target.clone());
-            blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit)).await??
+            blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit, &chain))
+                .await??
         };
         let failed = match made {
             MergeTree::Clean { base, tree } => {
@@ -251,7 +251,7 @@ impl Daemon {
                 .await?
             }
             // Nothing is left to merge, or the merge cannot be made: the merge tells.
-            MergeTree::Landed { .. } | MergeTree::Conflict { .. } | MergeTree::Unrelated => {
+            MergeTree::Landed { .. } | MergeTree::Conflict { .. } | MergeTree::Rewritten => {
                 Vec::new()
             }
         };
