@@ -95,11 +95,29 @@ earlier move wins on every machine, and the other machine puts its `main` back o
 
 ### Rewriting the target
 
-A push cannot rewrite `main`, but writing the ref in wf's repository directly can, after a `git
-filter-branch` of the whole history, say. When `main` there has no history in common with the commit
-the log names, no merge starts: items stay in `review`, the daemon warns once in its log, and `wf
-inbox` (as `unrelated_target`), `wf status` and the dashboard name both commits. wf does not take
-the new history by itself, as it may just as well be a mistake. You say which is right:
+A push cannot rewrite `main`, and wf never takes a rewrite by itself: it may just as well be a
+mistake. You adopt it with `wf target adopt`, and the log goes on from it. The waiting merges then go
+on, and your other machines move their `main` to the rewrite once its commit arrives.
+
+When the rewrite keeps the older history and replaces the last commits (a `git filter-branch` of the
+commits since some point to drop trailers, a rebase that removes a leaked secret), push it to another
+branch of wf's repository and adopt that branch:
+
+```sh
+git push wf rewrite/no-trailers          # beside main, which it does not move
+wf target adopt rewrite/no-trailers      # the log goes on from it
+git push wf --delete rewrite/no-trailers # once adopted, if you like
+```
+
+Do not write it to `main` there directly: sharing history with `main`, it looks like a push of yours
+that lost to another machine, and `main` goes back. It then waits in `wf inbox` as `lost_push`, and
+`wf target adopt <commit>` with the commit it names takes it from there.
+
+When the rewrite replaces the whole history, after a `git filter-branch` from the root, say, writing
+the ref in wf's repository directly is how it gets there. `main` there then has no history in common
+with the commit the log names, and no merge starts: items stay in `review`, the daemon warns once in
+its log, and `wf inbox` (as `unrelated_target`), `wf status` and the dashboard name both commits. You
+say which is right:
 
 ```sh
 wf target adopt 275857e2                 # the rewrite is meant: the log goes on from it
@@ -108,13 +126,13 @@ git -C ~/.local/share/workforce/<workforce id>/git update-ref refs/heads/main d5
 ```
 
 Name the commit `wf inbox` shows: it must be where `main` is, so that what you looked at is what is
-adopted. The waiting merges then go on, and your other machines move their `main` to the rewrite
-once its commit arrives. Do this while nothing else moves `main`: a merge on another machine that
-crossed the adoption can win, as above, and it then waits as `lost_push`.
+adopted.
 
-Work begun on the old history does not merge: its item goes back to `open` with a comment, and the
-next session takes its own commits across with `git rebase --onto`. Your own checkout on the old
-history has diverged from `main`, and `wf status` says so.
+Either way, do this while nothing else moves `main`: a merge on another machine that crossed the
+adoption can win, as above, and it then waits as `lost_push`. Work begun on the old history does not
+merge, as it would bring the old history back: its item goes back to `open` with a comment, and the
+next session takes its own commits across with `git rebase --onto`. Work merged before stays done.
+Your own checkout on the old history has diverged from `main`, and `wf status` says so.
 
 ## Syncing
 

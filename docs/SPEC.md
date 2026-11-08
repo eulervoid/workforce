@@ -1311,28 +1311,41 @@ Every move of the target names the tip it moved from, so every device agrees whe
 * **A lost push** of the principal waits in their inbox (`lost_push`), the latest of each device,
   until a later push from it is on the chain: rebase onto the target (`git pull --rebase`) and push
   again. A principal who pulled a merge that later lost finds their next push lost the same way.
-* **A rewritten target.** No push rewrites the target, but a direct write of the ref in `<wf>/git`
-  can (`git filter-branch` of the whole history, or a wrong repository). A branch with no history in
-  common with the tip has no merge base to be a push from, and it never comes to one by itself, so
-  the daemon leaves it where it is: no merge starts and none is claimed, a first attempt says so on
-  the item, the daemon warns once per branch and tip, and the principal is told by `wf inbox`
-  (`unrelated_target`), `wf status` and the dashboard. That is kept by the daemon of the device, not
-  in the log, as only that device's `<wf>/git` is wrong.
+* **A rewritten target.** No push rewrites the target, and the daemon never takes a rewrite by
+  itself: it cannot tell one from a mistake, nor a rewrite that keeps the older history from a push
+  that lost a race. The principal adopts it, `wf target adopt <commit>`, which writes
+  `TargetMoved{commit, onto}` from the tip, nothing new in the log, and the chain goes on from
+  there. The commit must be in `<wf>/git`, and neither in the history of the tip nor ahead of it
+  (that is a push). Other devices follow like any move: they fetch the tip and move their branch to
+  it, from any commit a move made or left. An adoption is a move like any other, so a merge of
+  another device onto the same tip can win the fork: the branch then goes back, and the adoption
+  waits as a `lost_push`.
 
-  Accepting it by itself would accept a mistaken repository silently, so the principal answers:
-  `wf target adopt <commit>` writes the branch as `TargetMoved{commit, onto}` from the tip, nothing
-  new in the log, and the chain goes on from there; or they put the ref back at the tip, and the next
-  pass finds nothing wrong. The commit named must be where the branch is. Other devices follow like
-  any move: they fetch the tip and move their branch to it, from any commit a move made or left. A
-  device whose branch is on neither history (a push of the old history not yet written, or its own
-  rewrite) is told the same way. An adoption is a move like any other, so a merge of another device
-  onto the same tip can win the fork: the branch then goes back, and the adoption waits as a
-  `lost_push`.
+  A rewrite **below the tip** keeps the older history and replaces what came after (a `git
+  filter-branch` of the last commits, a rebase that drops a leaked secret). The principal pushes it
+  to another branch of `wf` (`git push wf rewrite`), which moves nothing, and adopts it there:
+  `wf target adopt rewrite`, a branch or commit of `<wf>/git`. Written directly to the target ref,
+  it would share history with the tip and be taken for a push forked off below it, which loses and
+  waits as a `lost_push`; its commit stays in `<wf>/git`, and `wf target adopt <commit>` takes it
+  from there.
 
-  Work on the old history cannot be merged afterwards: its item goes back to `open` with a comment,
-  like a conflict, and the agent's submission refuses a rebase, which would replay the old history
-  too, and says to take its own commits across with `git rebase --onto`. A checkout on the old
-  history diverges, as any does.
+  A rewrite of the **whole history** (`git filter-branch` from the root, or a wrong repository)
+  written to the target ref has no merge base with the tip to be a push from, and it never comes to
+  one by itself, so the daemon leaves it where it is: no merge starts and none is claimed, a first
+  attempt says so on the item, the daemon warns once per branch and tip, and the principal is told
+  by `wf inbox` (`unrelated_target`), `wf status` and the dashboard. That is kept by the daemon of
+  the device, not in the log, as only that device's `<wf>/git` is wrong. The principal adopts the
+  commit the branch is at, which must still be where it is, so that what they looked at is what is
+  adopted; or they put the ref back at the tip, and the next pass finds nothing wrong. A device
+  whose branch is on neither history (a push of the old history not yet written, or its own
+  rewrite) is told the same way.
+
+  Work on the old history cannot be merged afterwards: work that has no history in common with the
+  target, or has a commit the chain was at that the target no longer has, would bring the old
+  history back. Its item goes back to `open` with a comment, like a conflict, and the agent's
+  submission refuses a rebase, which would replay the old history too, and says to take its own
+  commits across with `git rebase --onto`. Merged work stays done, and its recorded commits stay
+  readable while their objects are there. A checkout on the old history diverges, as any does.
 
 ### Commit identity and signatures
 
