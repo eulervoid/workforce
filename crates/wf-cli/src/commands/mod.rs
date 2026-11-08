@@ -228,21 +228,15 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Takes the rewritten target as the target. The principal names the commit, so that what they
-/// looked at is what is adopted.
-fn adopt_target(json: bool, workspace: &mut Workspace, commit: &str) -> anyhow::Result<()> {
-    let Some(unrelated) = workspace.unrelated_target()? else {
-        bail!("the target follows the log: there is nothing to adopt");
-    };
-    let branch = unrelated.branch;
-    if commit.len() < branch.short().len() || !branch.to_string().starts_with(commit) {
-        bail!("the target is at {}, not {commit}", branch.short());
-    }
-    workspace.adopt_target(branch)?;
+/// Takes a rewrite of the target as the target. The principal names the commit, so that what they
+/// looked at is what is adopted: the branch of wf's repository with no history in common with the
+/// log, or a rewrite with history in common that they pushed to another branch of `wf`.
+fn adopt_target(json: bool, workspace: &mut Workspace, revision: &str) -> anyhow::Result<()> {
+    let commit = workspace.adopt_target(revision)?;
     emit(
         json,
         &Done {
-            message: format!("The target goes on from {}", branch.short()),
+            message: format!("The target goes on from {}", commit.short()),
             event: None,
             session: None,
             item: None,

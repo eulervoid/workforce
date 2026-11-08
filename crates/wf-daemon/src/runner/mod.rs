@@ -58,9 +58,18 @@ pub enum SessionError {
     UnknownHarness(HarnessName),
     #[error("the workforce has no policy yet")]
     NoPolicy,
-    #[error("the target follows the log: there is nothing to adopt")]
-    TargetNotUnrelated,
-    #[error("the target moved to {}: look at it, and adopt that if it is right", .branch.short())]
+    #[error("the target is not where the log says yet: adopt again once it is")]
+    TargetMoving,
+    #[error(
+        "{} is not in wf's repository: push the rewrite to a branch of `wf` first",
+        .0.short()
+    )]
+    UnknownCommit(CommitId),
+    #[error("{} is in the target already: there is nothing to adopt", .0.short())]
+    InTarget(CommitId),
+    #[error("{} goes on from the target: push it instead", .0.short())]
+    AheadOfTarget(CommitId),
+    #[error("the target is at {}: look at it, and adopt that if it is right", .branch.short())]
     TargetElsewhere { branch: CommitId },
     #[error("there is no item #{}", .0.short())]
     UnknownItem(ItemId),
@@ -146,7 +155,10 @@ impl SessionError {
             )
             | Self::NotBound
             | Self::NoPolicy
-            | Self::TargetNotUnrelated
+            | Self::TargetMoving
+            | Self::UnknownCommit(_)
+            | Self::InTarget(_)
+            | Self::AheadOfTarget(_)
             | Self::TargetElsewhere { .. }
             | Self::UnknownAgent(_)
             | Self::UnknownHarness(_)

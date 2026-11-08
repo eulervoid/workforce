@@ -236,13 +236,20 @@ pub enum PermissionsCommand {
 
 #[derive(Subcommand)]
 pub enum TargetCommand {
-    /// Take a rewritten target branch as the target.
+    /// Take a rewrite of the target branch as the target.
     ///
-    /// For when the target in wf's repository shares no history with the tip the log names, and
-    /// no merge starts: `wf inbox` names both. The log then goes on from the rewritten branch,
-    /// and the other devices move their target to it.
+    /// A rewrite that keeps the older history and replaces what came after (a `git filter-branch`
+    /// of the last commits, a rebase that drops a leaked secret): push it to another branch of
+    /// `wf`, such as `git push wf rewrite`, and adopt that branch. Pushed to the target itself it
+    /// is refused, and written there directly it is taken for a push that lost to the log.
+    ///
+    /// A rewrite of the whole history, written to the target in wf's repository: it shares no
+    /// history with the tip the log names, no merge starts, and `wf inbox` names both. Adopt the
+    /// commit the target is at.
+    ///
+    /// The log then goes on from the rewrite, and the other devices move their target to it.
     Adopt {
-        /// The commit the branch is at, as `wf inbox` names it.
+        /// The rewrite: a commit or branch of wf's repository, or the commit `wf inbox` names.
         commit: String,
     },
 }

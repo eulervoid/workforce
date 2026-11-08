@@ -2029,6 +2029,55 @@ fn a_rewritten_target_waits_in_the_inbox_until_the_principal_adopts_it() {
 }
 
 #[test]
+fn a_rewrite_below_the_tip_pushed_to_another_branch_is_adopted_by_its_name() {
+    use wf_vcs::testing::{git_in, init_repository};
+
+    let wf = Sandbox::new();
+    init_repository(&wf.repository);
+    wf.run(&["init", "--name", "demo"]);
+    let daemon = wf.start_daemon();
+    let moves = || {
+        wf.json(&["log"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event.to_string().contains("TargetMoved"))
+            .count()
+    };
+    std::fs::write(wf.repository.join("own.txt"), "own\n").unwrap();
+    git_in(&wf.repository, &["add", "own.txt"]);
+    git_in(&wf.repository, &["commit", "--quiet", "-m", "own"]);
+    git_in(&wf.repository, &["push", "--quiet", "wf", "main"]);
+    for _ in 0..600 {
+        if moves() == 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(moves(), 1, "the push is written");
+
+    // The last commit rewritten with a new message, the history below it kept.
+    git_in(&wf.repository, &["checkout", "--quiet", "-b", "rewrite"]);
+    git_in(
+        &wf.repository,
+        &["commit", "--amend", "--quiet", "-m", "own, rewritten"],
+    );
+    let rewritten = git_in(&wf.repository, &["rev-parse", "rewrite"]);
+    let error = wf.fail(&["target", "adopt", "rewrite"]);
+    assert!(error.contains("git push wf"), "{error}");
+    git_in(&wf.repository, &["push", "--quiet", "wf", "rewrite"]);
+
+    let adopted = wf.run(&["target", "adopt", "rewrite"]);
+    assert!(adopted.contains(&rewritten[..8]), "{adopted}");
+    assert_eq!(moves(), 2);
+    let inbox = wf.json(&["inbox"]);
+    assert_eq!(inbox.as_array().unwrap().len(), 0, "{inbox}");
+    git_in(&wf.repository, &["fetch", "--quiet", "wf"]);
+    assert_eq!(git_in(&wf.repository, &["rev-parse", "wf/main"]), rewritten);
+    daemon.stop();
+}
+
+#[test]
 fn a_fork_starts_with_the_repository_of_its_parent_and_the_checkout_pushes_to_it() {
     use wf_vcs::testing::{git_in, init_repository};
 
