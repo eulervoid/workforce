@@ -65,7 +65,7 @@ impl Daemon {
         checked: &mut CheckedReviews,
     ) -> Result<(), SessionError> {
         let device = self.device();
-        let Some((target, principal, offers)) = self
+        let Some((target, principal, offers, chain)) = self
             .read(loaded, move |state| {
                 let target = state.policy()?.policy.merge.target.clone();
                 let principal = state.principal_of(&device)?;
@@ -82,7 +82,7 @@ impl Daemon {
                         after_conflict: state.after_failed_merge(item, MergeFailure::Conflict),
                     })
                     .collect();
-                Some((target, principal, offers))
+                Some((target, principal, offers, state.chain_commits()))
             })
             .await?
         else {
@@ -126,9 +126,11 @@ impl Daemon {
                 Some((checked_head, merges)) if *checked_head == head => Ok(merges.clone()),
                 _ => {
                     let (repository, target) = (repository.to_path_buf(), target.clone());
-                    let merges =
-                        blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit))
-                            .await?;
+                    let chain = chain.clone();
+                    let merges = blocking(move || {
+                        GitCli::open(&repository)?.merge_tree(&target, commit, &chain)
+                    })
+                    .await?;
                     if let Ok(merges) = &merges {
                         checked
                             .merges
@@ -160,7 +162,7 @@ impl Daemon {
                 }
                 Ok(MergeTree::Conflict { paths }) => paths,
                 // The merge tells, once the principal has settled the target.
-                Ok(MergeTree::Unrelated) => continue,
+                Ok(MergeTree::Rewritten) => continue,
                 Err(error) => {
                     tracing::warn!(
                         "could not check whether #{} merges into {target}: {}",

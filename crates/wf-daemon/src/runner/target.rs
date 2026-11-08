@@ -142,6 +142,21 @@ fn decide(
     Ok((Some(branch), follow))
 }
 
+/// Checks that `commit` rewrites the target at `tip`: it is here, and neither in the history of
+/// the tip nor a commit that goes on from it, which is a push.
+fn rewrite_of(git: &GitCli, tip: CommitId, commit: CommitId) -> Result<(), SessionError> {
+    if !git.has_commit(commit)? {
+        return Err(SessionError::UnknownCommit(commit));
+    }
+    if git.is_ancestor(commit, tip)? {
+        return Err(SessionError::InTarget(commit));
+    }
+    if git.is_ancestor(tip, commit)? {
+        return Err(SessionError::AheadOfTarget(commit));
+    }
+    Ok(())
+}
+
 /// What the log says of the target that a pass acts on. A change of the log that leaves it as it
 /// was needs no pass, so that not every event runs git.
 #[derive(PartialEq, Eq)]
@@ -332,8 +347,10 @@ impl Daemon {
         Ok(Some((follow, reading)))
     }
 
-    /// The principal says that the target branch, unrelated to the tip the log names, is right:
-    /// writes it as a move from that tip. It must still be at `commit`, the one they looked at.
+    /// The principal says that `commit`, a rewrite of the target, is right: writes it as a move
+    /// from the tip. Either the target branch shares no history with the tip and is still at
+    /// `commit`, the one they looked at; or it is at the tip, and `commit` is in `<wf>/git` beside
+    /// it, rewritten below the tip, where no pass takes it for a push.
     pub(crate) async fn adopt_target(
         &self,
         workforce: WorkforceId,
@@ -341,7 +358,7 @@ impl Daemon {
         commit: CommitId,
     ) -> Result<(), SessionError> {
         let Some(git) = self.open_bare_repository(workforce, loaded).await? else {
-            return Err(SessionError::TargetNotUnrelated);
+            return Err(SessionError::TargetMoving);
         };
         let mut seen = loaded.target.seen.lock().await;
         let Some((follow, reading)) = self.look(loaded, &git, &mut seen).await? else {
@@ -352,8 +369,13 @@ impl Daemon {
             Follow::Unrelated { branch, .. } => {
                 return Err(SessionError::TargetElsewhere { branch });
             }
-            Follow::Stays { .. } | Follow::Waits | Follow::Record { .. } | Follow::Moves { .. } => {
-                return Err(SessionError::TargetNotUnrelated);
+            Follow::Stays { at } => {
+                let git = git.clone();
+                blocking(move || rewrite_of(&git, at, commit)).await??;
+                at
+            }
+            Follow::Waits | Follow::Record { .. } | Follow::Moves { .. } => {
+                return Err(SessionError::TargetMoving);
             }
         };
         let principal = reading.principal.ok_or(SessionError::NotBound)?;
@@ -527,6 +549,65 @@ mod tests {
                 &["update-ref", "refs/heads/main", &rewritten.to_string()],
             );
             rewritten
+        }
+
+        /// A commit on `parent` with its tree, made in `<wf>/git` without moving `main`.
+        fn commit_on(&self, parent: CommitId, name: &str) -> CommitId {
+            let bare = self.bare();
+            let commit = git_in(
+                &bare,
+                &[
+                    "-c",
+                    "user.name=principal",
+                    "-c",
+                    "user.email=principal@example.com",
+                    "commit-tree",
+                    &format!("{parent}^{{tree}}"),
+                    "-p",
+                    &parent.to_string(),
+                    "-m",
+                    name,
+                ],
+            );
+            git_in(
+                &bare,
+                &["update-ref", &format!("refs/test/{name}"), &commit],
+            );
+            CommitId::Git(commit.parse().unwrap())
+        }
+
+        /// `main` rewritten below its tip, as a `git filter-branch` of its last commit leaves it:
+        /// the same tree on the same parent, with a new message. In `<wf>/git` beside `main`, as
+        /// the principal's push of it to another branch of `wf` puts it.
+        fn rewritten_below(&self) -> CommitId {
+            let bare = self.bare();
+            let commit = git_in(
+                &bare,
+                &[
+                    "-c",
+                    "user.name=principal",
+                    "-c",
+                    "user.email=principal@example.com",
+                    "commit-tree",
+                    "main^{tree}",
+                    "-p",
+                    "main^",
+                    "-m",
+                    "rewritten below the tip",
+                ],
+            );
+            git_in(&bare, &["update-ref", "refs/heads/rewrite", &commit]);
+            CommitId::Git(commit.parse().unwrap())
+        }
+
+        /// The log at a push on top of `main` of the repository, which a rewrite below the tip
+        /// replaces; returns the push.
+        async fn pushed_on_main(&mut self) -> CommitId {
+            self.tip_at_main().await;
+            let pushed = self.commit("pushed");
+            self.push("pushed");
+            assert_eq!(self.follow().await, Some(pushed));
+            pushed
         }
 
         /// An item in `review` with work submitted at `reviewed`.
@@ -759,14 +840,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_the_commit_the_target_is_at_can_be_adopted_and_only_while_it_is_unrelated() {
+    async fn only_a_rewrite_of_the_target_can_be_adopted() {
+        let mut scene = Scene::new().await;
+        let pushed = scene.pushed_on_main().await;
+        let main = scene.repository.main();
+        match scene.adopt(pushed).await {
+            Err(SessionError::InTarget(commit)) => assert_eq!(commit, pushed),
+            other => panic!("{other:?}"),
+        }
+        match scene.adopt(main).await {
+            Err(SessionError::InTarget(commit)) => assert_eq!(commit, main),
+            other => panic!("{other:?}"),
+        }
+        let ahead = scene.commit_on(pushed, "ahead");
+        match scene.adopt(ahead).await {
+            Err(SessionError::AheadOfTarget(commit)) => assert_eq!(commit, ahead),
+            other => panic!("{other:?}"),
+        }
+        let missing = CommitId::Git("0123456789abcdef0123456789abcdef01234567".parse().unwrap());
+        match scene.adopt(missing).await {
+            Err(SessionError::UnknownCommit(commit)) => assert_eq!(commit, missing),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(scene.state().await.target(), Some(pushed));
+    }
+
+    #[tokio::test]
+    async fn while_the_target_is_unrelated_only_the_commit_it_is_at_can_be_adopted() {
         let mut scene = Scene::new().await;
         let main = scene.tip_at_main().await;
-        assert!(matches!(
-            scene.adopt(main).await,
-            Err(SessionError::TargetNotUnrelated)
-        ));
-
         let rewritten = scene.rewrite();
         let another = scene.commit("another");
         match scene.adopt(another).await {
@@ -774,6 +876,99 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(scene.state().await.target(), Some(main));
+    }
+
+    /// The case that asked for it: the last commits rewritten, the older history kept, pushed to
+    /// another branch of `wf` and adopted from there. The branch shows the rewrite only once the
+    /// log names it, so no pass takes it for a push.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rewrite_below_the_tip_is_adopted_and_the_next_merge_lands_on_it() {
+        let mut scene = Scene::new().await;
+        let pushed = scene.pushed_on_main().await;
+        let rewritten = scene.rewritten_below();
+        assert_eq!(
+            scene.follow().await,
+            Some(pushed),
+            "beside the target, it waits"
+        );
+
+        scene.adopt(rewritten).await.unwrap();
+        let state = scene.state().await;
+        assert_eq!(state.target(), Some(rewritten));
+        let tip = state.target_tip().unwrap();
+        assert_eq!((tip.onto, tip.cause), (pushed, MoveCause::Push));
+        assert!(state.lost_pushes(scene.fixture.founder.key()).is_empty());
+        assert_eq!(scene.main(), rewritten);
+        assert_eq!(scene.follow().await, Some(rewritten));
+
+        let reviewed = scene.commit_on(rewritten, "reviewed");
+        let (item, _) = scene.submitted(reviewed).await;
+        let state = scene
+            .wait_for("the dispatcher merges it", |state| {
+                state.live_state(item) == Some(ItemState::Done)
+            })
+            .await;
+        let tip = state.target_tip().unwrap();
+        assert_eq!(
+            (tip.onto, tip.cause),
+            (rewritten, MoveCause::Merge { item }),
+            "the merge went onto the rewrite"
+        );
+        assert_eq!(scene.main(), tip.commit);
+    }
+
+    /// Written to the target directly, a rewrite below the tip is a push forked off the chain, as
+    /// a push that lost a race is: it loses, and waits as a lost push. Its commit stays in
+    /// `<wf>/git`, so the principal adopts it from there.
+    #[tokio::test]
+    async fn a_rewrite_below_the_tip_written_to_the_target_is_a_lost_push_until_adopted() {
+        let mut scene = Scene::new().await;
+        let pushed = scene.pushed_on_main().await;
+        let rewritten = scene.rewritten_below();
+        git_in(
+            &scene.bare(),
+            &["update-ref", "refs/heads/main", &rewritten.to_string()],
+        );
+        scene.follow().await;
+        assert_eq!(scene.follow().await, Some(pushed), "the branch goes back");
+        let lost = |state: &State| -> Vec<CommitId> {
+            state
+                .lost_pushes(scene.fixture.founder.key())
+                .iter()
+                .map(|push| push.commit)
+                .collect()
+        };
+        assert_eq!(lost(&scene.state().await), [rewritten]);
+
+        scene.adopt(rewritten).await.unwrap();
+        let state = scene.state().await;
+        assert_eq!(state.target(), Some(rewritten));
+        assert_eq!(state.target_tip().unwrap().onto, pushed);
+        assert!(lost(&state).is_empty());
+        assert_eq!(scene.main(), rewritten);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn work_on_the_history_a_rewrite_below_the_tip_replaced_goes_back_to_a_session() {
+        let mut scene = Scene::new().await;
+        let pushed = scene.pushed_on_main().await;
+        let reviewed = scene.commit_on(pushed, "reviewed");
+        let rewritten = scene.rewritten_below();
+        scene.adopt(rewritten).await.unwrap();
+
+        let (item, _) = scene.submitted(reviewed).await;
+        let state = scene
+            .wait_for("the dispatcher sends it back", |state| {
+                state.live_state(item) == Some(ItemState::Open)
+            })
+            .await;
+        let Some(wf_core::item::ItemEntry::Live(live)) = state.item(item) else {
+            panic!("the item is live");
+        };
+        assert_eq!(live.merges().count(), 0);
+        assert_eq!(live.comments().len(), 1, "it says why");
+        assert_eq!(state.target(), Some(rewritten), "the old history stays out");
+        assert_eq!(scene.main(), rewritten);
     }
 
     /// The other device has the old history: its branch goes to the rewrite by compare-and-swap,

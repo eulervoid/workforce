@@ -6,7 +6,7 @@
 //! tip it goes on with the earliest later move onto it, so a move made from a commit before the
 //! chain came back to it is no fork, and moves that go round in a circle are followed round it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +81,21 @@ impl State {
         self.workforce
             .iter()
             .flat_map(|workforce| workforce.target_moves.values())
+    }
+
+    /// Every commit the target was at on its chain, from where it started to its end. Without a
+    /// rewrite each is in the history of the target; work that has one the target lacks was begun
+    /// on a history the target was rewritten from.
+    pub fn chain_commits(&self) -> BTreeSet<CommitId> {
+        let Some(workforce) = self.workforce.as_ref() else {
+            return BTreeSet::new();
+        };
+        workforce
+            .target_chain
+            .iter()
+            .filter_map(|event| workforce.target_moves.get(event))
+            .flat_map(|step| [step.onto, step.commit])
+            .collect()
     }
 
     /// Whether the move written by `event` lost a fork: it is not on the chain.

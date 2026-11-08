@@ -105,9 +105,11 @@ pub fn lost_push_view(state: &State, push: &TargetMove) -> InboxEntryView {
         title: format!("The push of {} to {target} lost", push.commit.short()),
         what: format!(
             "rebase it onto {target}, such as with `git pull --rebase`, and push again: another \
-             device moved {target} from {} before the push from {}",
+             device moved {target} from {} before the push from {}. If it rewrites {target} on \
+             purpose, `wf target adopt {}`",
             push.onto.short(),
-            super::device_name(state, push.device)
+            super::device_name(state, push.device),
+            push.commit.short()
         ),
         passed: Vec::new(),
     }
